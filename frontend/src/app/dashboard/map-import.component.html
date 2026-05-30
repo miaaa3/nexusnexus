@@ -1,0 +1,30 @@
+<div class="map-import">
+  <div class="map-import__head">
+    <span class="map-import__title">MAP IMPORT</span>
+    @if (loading) {
+      <span class="map-import__status">Loading…</span>
+    }
+  </div>
+
+  <label class="map-import__file">
+    <input type="file" accept=".osm,.osm.xml" (change)="onFileSelected($event)" />
+    <span>{{ selectedFile?.name || 'Choose .osm file' }}</span>
+  </label>
+
+  <button class="map-import__button"
+    [disabled]="!selectedFile || loading"
+    (click)="upload()">
+    {{ loading ? 'Importing…' : 'Upload map' }}
+  </button>
+
+  @if (result) {
+    <div class="map-import__success">
+      <strong>{{ result.mapName }}</strong>
+      <span>{{ result.nodeCount | number }} nodes · {{ result.edgeCount | number }} edges</span>
+    </div>
+  }
+
+  @if (error) {
+    <div class="map-import__error">{{ error }}</div>
+  }
+</div>

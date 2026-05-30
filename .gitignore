@@ -1,0 +1,77 @@
+# ============================================================================
+#  NexusNexus — repo-root .gitignore
+#  Frontend has its own (Angular CLI defaults); this covers everything else.
+# ============================================================================
+
+# ── Java / Maven (backend) ────────────────────────────────────────────────────
+backend/target/
+backend/.mvn/wrapper/maven-wrapper.jar
+backend/**/*.class
+backend/**/*.jar
+backend/**/*.log
+hs_err_pid*
+
+# ── Node / Angular (frontend) ────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+frontend/coverage/
+frontend/.cache/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# ── Large data files (not committed — see README for download links) ─────────
+# Match *.osm/.osm.xml/.pbf ANYWHERE in the repo (GitHub caps single files
+# at 100 MB; a city extract is typically 200-400 MB).
+**/*.osm
+**/*.osm.xml
+**/*.pbf
+# IRIS GeoJSON is also large (~50 MB per department).
+backend/data/iris/*.geojson
+backend/data/iris/*.json
+# …but keep the directory structure
+!backend/data/maps/.gitkeep
+!backend/data/iris/.gitkeep
+
+# ── IDE / editor ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.project
+.classpath
+.settings/
+.factorypath
+*.swp
+*.swo
+
+# ── OS junk ──────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Environment / secrets ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+**/application-local.yml
+**/application-local.yaml
+**/application-secrets.yml
+
+# ── Build & deploy ───────────────────────────────────────────────────────────
+*.tgz
+*.zip
+*.tar.gz
+build/
+out/
+
+# ── Misc Claude / agent scratch ──────────────────────────────────────────────
+.claude/
+.cowork/

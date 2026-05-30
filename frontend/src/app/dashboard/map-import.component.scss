@@ -1,0 +1,86 @@
+.map-import {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 240px;
+}
+
+.map-import__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.map-import__title,
+.map-import__status {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: rgba(255,255,255,.35);
+}
+
+.map-import__status {
+  color: #3d9eff;
+}
+
+.map-import__file {
+  display: block;
+  padding: 8px 10px;
+  border: 1px dashed rgba(61,158,255,.35);
+  border-radius: 7px;
+  background: rgba(61,158,255,.08);
+  color: rgba(255,255,255,.65);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-import__file input {
+  display: none;
+}
+
+.map-import__button {
+  width: 100%;
+  padding: 7px;
+  border-radius: 7px;
+  background: rgba(61,158,255,.14);
+  border: 1px solid rgba(61,158,255,.38);
+  color: #6db5ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.map-import__button:disabled {
+  opacity: .38;
+  cursor: not-allowed;
+}
+
+.map-import__success,
+.map-import__error {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.map-import__success {
+  color: #82f5b0;
+  background: rgba(46,204,113,.1);
+  border: 1px solid rgba(46,204,113,.22);
+}
+
+.map-import__error {
+  color: #ff9a90;
+  background: rgba(231,76,60,.1);
+  border: 1px solid rgba(231,76,60,.25);
+}
