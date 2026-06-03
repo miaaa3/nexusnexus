@@ -269,9 +269,9 @@ void main() {
     a_quad.x * sinD + a_quad.y * cosD
   );
 
-  // Selected vehicles pulse in size
-  float pulse = a_selected > 0.5 ? 1.0 + 0.25 * sin(u_time * 6.0) : 1.0;
-  float pixelSize = 6.0 * a_size * u_pixelRatio * pulse;
+  // Directional glyph: a compact arrow-like marker with constant screen size.
+  float pulse = a_selected > 0.5 ? 1.0 + 0.18 * sin(u_time * 6.0) : 1.0;
+  float pixelSize = 7.4 * a_size * u_pixelRatio * pulse;
 
   vec4 projected = u_matrix * vec4(a_position, 0.0, 1.0);
 
@@ -297,22 +297,37 @@ in float v_selected;
 out vec4 fragColor;
 
 void main() {
-  float d = abs(v_uv.x) + abs(v_uv.y);
-  if (d > 1.0) discard;
+  vec2 p = v_uv;
+  float forwardY = -p.y;
 
-  float alpha = 1.0 - smoothstep(0.5, 1.0, d);
-  float glow  = 1.0 - smoothstep(0.0, 0.4, d);
+  // Taper the vehicle from a wider rear to a narrow front, so heading is visible.
+  float taper = smoothstep(-0.25, 1.0, forwardY);
+  float halfWidth = mix(0.48, 0.08, taper);
+  float sideEdge = 1.0 - smoothstep(halfWidth, halfWidth + 0.07, abs(p.x));
+  float frontEdge = 1.0 - smoothstep(0.92, 1.02, forwardY);
+  float rearEdge = smoothstep(-1.02, -0.82, forwardY);
+  float bodyAlpha = sideEdge * frontEdge * rearEdge;
 
-  vec3 color = v_color + glow * 0.4;
-
-  // Selected: bright white halo ring
+  float selectedHalo = 0.0;
   if (v_selected > 0.5) {
-    float ring = smoothstep(0.6, 0.75, d) * (1.0 - smoothstep(0.75, 0.95, d));
-    color = mix(color, vec3(1.0), ring * 0.9);
-    alpha = max(alpha, ring * 0.85);
+    float hd = length(p * vec2(0.82, 0.64));
+    selectedHalo = smoothstep(0.82, 0.92, hd) * (1.0 - smoothstep(0.92, 1.16, hd));
   }
 
-  fragColor = vec4(color, alpha * 0.92);
+  if (bodyAlpha < 0.02 && selectedHalo < 0.02) discard;
+
+  float noseGlow = smoothstep(0.0, 0.95, forwardY) * (1.0 - smoothstep(0.0, 0.28, abs(p.x)));
+  float coreGlow = 1.0 - smoothstep(0.0, 0.55, length(p * vec2(1.25, 0.82)));
+
+  vec3 color = v_color + coreGlow * 0.20 + noseGlow * 0.34;
+  float alpha = bodyAlpha * 0.94;
+
+  if (v_selected > 0.5) {
+    color = mix(color, vec3(1.0), selectedHalo * 0.82);
+    alpha = max(alpha, selectedHalo * 0.88);
+  }
+
+  fragColor = vec4(color, alpha);
 }
 `;
 

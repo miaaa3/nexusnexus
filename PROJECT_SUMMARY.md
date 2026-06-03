@@ -100,7 +100,7 @@ NexusNexus/
     │   ├── incident-layer.service.ts   # MapLibre circle layer — mock Paris incidents
     │   └── geofence-layer.service.ts   # MapLibre fill/outline/label layers — mock geofence zones
     ├── vehicles/
-    │   ├── vehicle-renderer.ts         # WebGL2 instanced dots (compact slot reassignment)
+    │   ├── vehicle-renderer.ts         # WebGL2 instanced directional glyphs (compact slot reassignment)
     │   ├── trail-renderer.ts           # WebGL2 line trails (bounded ring buffers, cached colours, VAO)
     │   ├── congestion-renderer.ts      # WebGL2 grid cells coloured by density/speed
     │   ├── spatial-grid.ts             # uniform spatial grid for O(k) frustum culling
@@ -124,10 +124,13 @@ frontend/src/environments/
 ### Frontend
 
 **WebGL instanced rendering**
-Vehicles are drawn with a single `drawArraysInstanced` call. Each instance is 9 floats: position (mercatorX/Y), colour (RGB), size, direction (sin/cos), selected flag. The quad is a 4-vertex TRIANGLE_FAN; the fragment shader discards corners to make a circle with a glow.
+Vehicles are drawn with a single `drawArraysInstanced` call. Each instance is 9 floats: position (mercatorX/Y), colour (RGB), size, direction (sin/cos), selected flag. The quad is a 4-vertex TRIANGLE_FAN; the fragment shader turns it into a tapered directional glyph with a nose glow and selected halo.
 
 **Compact slot reassignment (vehicle-renderer.ts)**
 Every `updateVehicles` call clears `idToSlot` and assigns slots 0…N-1 to the *currently visible* vehicles. This ensures `drawArraysInstanced(…, vehicleCount)` always draws the right data. A `lastKnownPos` map preserves positions across viewport changes for smooth interpolation.
+
+**Directional vehicle styling (vehicle-renderer.ts)**
+Vehicle markers now show heading directly in the WebGL shader: the local fragment shape tapers from rear to front, brightens the nose, and gives selected vehicles a white halo ring. This improves readability without adding CPU-side geometry or DOM elements.
 
 **Spatial grid culling (spatial-grid.ts)**
 Vehicles are bucketed into lat/lon cells (cell size ≈ 0.005°). On each frame only the cells overlapping the current map bounds are queried — O(k) instead of O(n).
@@ -183,6 +186,7 @@ All movement math uses primitive `double` variables. No `new` calls inside the t
 - ✅ Live vehicle streaming (WebSocket/STOMP, ~10 Hz)
 - ✅ rAF-coalesced frontend frame handling — multiple WebSocket arrivals collapse into one render snapshot
 - ✅ WebGL2 instanced rendering — handles 5 000+ vehicles at 60 FPS
+- ✅ Directional WebGL vehicle markers — heading is visible through tapered glyphs and nose glow
 - ✅ Vehicles follow real Paris roads (OSM via Overpass API)
 - ✅ **OSM file upload** — import any `.osm` / `.osm.xml`; backend parses it, swaps the live road graph, respawns vehicles on real edges, map recenters on the imported bounds
 - ✅ **A\* pathfinding** — vehicles pick real routes to random destinations; reassign on arrival
@@ -192,6 +196,7 @@ All movement math uses primitive `double` variables. No `new` calls inside the t
 - ✅ Fading trail lines per vehicle (bounded ring-buffer history)
 - ✅ Traffic density heatmap overlay (MapLibre)
 - ✅ Congestion grid (WebGL cells: green→yellow→red by density+speed)
+- ✅ Congestion flow legend — compact dashboard ramp appears when congestion overlay is active
 - ✅ **Traffic zones & rush hour** — simulated clock (60×), mode-based speed + jitter
 - ✅ **Traffic mode override** — click the mode badge or press R to cycle RUSH HOUR / NORMAL / NIGHT
 - ✅ **Pause / Resume** — freezes vehicle positions; button in controls panel + P key

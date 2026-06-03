@@ -50,7 +50,7 @@ frontend/src/
     │   └── iris-layer.service.ts   — INSEE IRIS choropleth; loads zones once, polls counts/3s; click popup; shortcut N
     │
     ├── vehicles/
-    │   ├── vehicle-renderer.ts     — WebGL2 instanced quads; compact slot reassignment; VAO
+    │   ├── vehicle-renderer.ts     — WebGL2 instanced directional vehicle glyphs; compact slot reassignment; VAO
     │   ├── trail-renderer.ts       — WebGL2 line trails; capped ring buffer per vehicle; cached colours; VAO
     │   ├── congestion-renderer.ts  — WebGL2 grid cells coloured green→yellow→red by density+speed
     │   ├── spatial-grid.ts         — uniform lat/lon grid; O(k) frustum culling
@@ -165,6 +165,7 @@ Bridge between `MapComponent` (writes) and `DashboardComponent` (reads). No circ
 | Selected Vehicle | pulsing dot + id/type/speed/direction/lat/lon |
 | Simulation Controls | Vehicles slider (50–5000), Speed× slider (0–5), **Pause/Resume button** |
 | Overlay Toggles | Trails(T) · Heat(H) · Congestion(C) · 3D(B) |
+| Flow Legend | appears when congestion is active; green→yellow→red traffic ramp |
 | Layer Toggles | Events/Incidents(I) · Zones/Geofences(G) · Map style cycler |
 | Replay | load / play / scrub / stop / speed chips |
 | Type Filters | CAR · BUS · TRUCK · MOTORCYCLE · EMERGENCY chips |
@@ -192,13 +193,13 @@ Bridge between `MapComponent` (writes) and `DashboardComponent` (reads). No circ
 // Zoom+pitch-invariant screen-space size:
 vec4 projected = u_matrix * vec4(a_position, 0.0, 1.0);
 vec2 rotated   = rotate(a_quad, a_direction);           // unit quad rotated by bearing
-float px       = 6.0 * a_size * u_pixelRatio * pulse;
+float px       = 7.4 * a_size * u_pixelRatio * pulse;
 vec2 offset    = rotated * px * 2.0 / u_viewport * projected.w;
 gl_Position    = projected + vec4(offset, 0.0, 0.0);
 // multiplying by .w before adding → hardware divide cancels it → constant pixel size
 ```
 
-Fragment: Manhattan distance → circle via smoothstep, inner glow, selected ring.
+Fragment: tapered local marker → directional vehicle glyph, nose glow, selected halo ring.
 
 ---
 
@@ -248,6 +249,7 @@ export const environment = {
 - **Angular change detection isolated** — WebSocket data flows directly to WebGL renderers, never through `@Component` inputs
 - **VAO per renderer** — each WebGL layer owns its VAO; MapLibre GL state can't corrupt it
 - **Compact slot reassignment** — `idToSlot` rebuilt each frame; `drawArraysInstanced(count)` always draws exactly visible vehicles
+- **Directional vehicle glyphs** — fragment shader tapers each marker from rear to nose so heading is readable without extra geometry
 - **rAF-coalesced WebSocket rendering** — incoming deltas update the local mirror immediately, but Angular/renderer subscribers see at most one full snapshot per browser animation frame
 - **Dashboard throttling** — stats, charts, and search pool updates are capped to 4 Hz so high vehicle counts do not force Angular work every render frame
 - **Bounded trails** — trails render for at most 1000 visible vehicles and cache per-vehicle colour to avoid O(n²) rebuilds

@@ -157,6 +157,21 @@ interface VehicleTypeMeta { type: VehicleType; label: string; color: string; }
         </button>
       </div>
 
+      @if (filters().congestionEnabled) {
+        <div class="panel panel--flow-legend">
+          <div class="legend-head">
+            <span class="legend-title">FLOW</span>
+            <span class="legend-live"></span>
+          </div>
+          <div class="legend-ramp"></div>
+          <div class="legend-labels">
+            <span>Free</span>
+            <span>Dense</span>
+            <span>Jam</span>
+          </div>
+        </div>
+      }
+
       <!-- ── Layers Toggles ────────────────────────────────────────── -->
       <div class="panel panel--toggles">
         <button class="toggle-btn" [class.toggle-btn--on]="filters().incidentsEnabled"
@@ -343,6 +358,14 @@ interface VehicleTypeMeta { type: VehicleType; label: string; color: string; }
     .toggle-btn:hover { color:rgba(255,255,255,.8); border-color:rgba(255,255,255,.2); }
     .toggle-btn--on { background:rgba(61,158,255,.15); border-color:rgba(61,158,255,.5); color:#3d9eff; }
     .ti { font-size:12px; }
+
+    /* Flow legend */
+    .panel--flow-legend { display:flex; flex-direction:column; gap:7px; padding:9px 12px; }
+    .legend-head { display:flex; align-items:center; justify-content:space-between; }
+    .legend-title { font-size:9px; font-weight:800; letter-spacing:1.6px; color:rgba(255,255,255,.42); }
+    .legend-live { width:7px; height:7px; border-radius:50%; background:#2ecc71; box-shadow:0 0 8px rgba(46,204,113,.75); animation:pulse 1.6s ease-in-out infinite; }
+    .legend-ramp { height:6px; border-radius:999px; background:linear-gradient(90deg,#19e66a 0%,#f4d13d 52%,#ff3148 100%); box-shadow:0 0 14px rgba(244,209,61,.14); }
+    .legend-labels { display:flex; align-items:center; justify-content:space-between; font-size:8px; font-weight:700; letter-spacing:.9px; text-transform:uppercase; color:rgba(255,255,255,.34); }
 
     /* Replay */
     .panel--replay { display:flex; flex-direction:column; gap:10px; }

@@ -18,7 +18,7 @@ streamed over WebSocket with sub-100 ms latency.
 | Frontend | Angular 17 (standalone components, signals), MapLibre GL JS, WebGL2, RxJS     |
 | Backend  | Spring Boot 3, Java 21, Maven, WebSocket (STOMP/SockJS), Jackson              |
 | Data     | OpenStreetMap (`.osm` files), INSEE IRIS (GeoJSON / IGN Géoplateforme WFS)    |
-| Render   | WebGL2 instanced rendering — single `drawArraysInstanced` per frame, 20 K cap |
+| Render   | WebGL2 instanced directional vehicle glyphs — single `drawArraysInstanced` per frame, 20 K cap |
 
 ---
 
@@ -139,6 +139,8 @@ the dashboard fills with live vehicles within ~1 s.
 - **rAF coalesce** — client applies deltas synchronously, downstream render batched per browser frame so SockJS backlog can't accumulate.
 - **A\* route cache + hot-edge avoidance** — paths memoised with a 5 s TTL; congested edges get a 2.5× cost penalty so vehicles route around jams. Hot-edge set rebuilt at 1 Hz.
 - **Adaptive sampling** — at city-wide zoom we sample 1 : N vehicles to the renderer; sub-pixel at that scale, no visual difference.
+- **Directional vehicle shader** — the fragment shader tapers each marker into a heading-aware glyph with a brighter nose and selected halo, without adding DOM or extra geometry.
+- **Congestion flow legend** — the dashboard shows a compact green→yellow→red ramp when the congestion overlay is enabled.
 - **Bbox + ray-cast geofence containment** — at 15 K vehicles × 250 IRIS polygons, the bbox prefilter rejects ~95 % of pairs in 4 compares.
 - **Lazy A\* + per-tick budget** — vehicles spawn with a minimal 2-node path; full A\* runs lazily, capped at 400 searches per tick to prevent spikes.
 - **WebGL2 instanced rendering** — single `drawArraysInstanced` per frame, 20 K instance slots in DYNAMIC_DRAW buffer.
