@@ -130,6 +130,52 @@ public class IrisZoneSystem {
 
     public int size() { return zones.size(); }
 
+    // ── Historique de congestion sur 1 h ─────────────────────────────────────
+
+    /** Nombre d'échantillons gardés par zone — 60 minutes × 1 par minute. */
+    private static final int HISTORY_LEN = 60;
+
+    /**
+     * Échantillonne le score de congestion COURANT pour chaque zone et l'ajoute
+     * au ring buffer. À appeler 1× par minute via @Scheduled depuis
+     * SimulationEngine. Coût : O(zones) — quelques dizaines de microsecondes.
+     */
+    public void recordHistorySample() {
+        for (IrisZone z : zones) {
+            // Même formule que snapshot() — zone vide → score 0.
+            double congestion = 0.0;
+            if (z.count > 0) {
+                double avg = z.sumSpeedKmh / z.count;
+                double speedDeficit = clamp01((FREE_FLOW_KMH - avg) / FREE_FLOW_KMH);
+                double incPenalty   = Math.min(0.4, z.incidents * 0.15);
+                congestion = clamp01(speedDeficit + incPenalty);
+            }
+            if (z.history == null) z.history = new double[HISTORY_LEN];
+            z.history[z.historyHead] = congestion;
+            z.historyHead = (z.historyHead + 1) % HISTORY_LEN;
+            if (z.historyFill < HISTORY_LEN) z.historyFill++;
+        }
+    }
+
+    /**
+     * Renvoie l'historique des scores de congestion d'une zone, dans l'ordre
+     * chronologique (du plus ancien au plus récent). Renvoie une liste vide
+     * si la zone n'existe pas ou n'a aucun échantillon.
+     */
+    public List<Double> historyForCode(String codeIris) {
+        for (IrisZone z : zones) {
+            if (!z.codeIris.equals(codeIris)) continue;
+            if (z.history == null || z.historyFill == 0) return List.of();
+            List<Double> out = new ArrayList<>(z.historyFill);
+            int start = (z.historyHead - z.historyFill + HISTORY_LEN) % HISTORY_LEN;
+            for (int i = 0; i < z.historyFill; i++) {
+                out.add(z.history[(start + i) % HISTORY_LEN]);
+            }
+            return out;
+        }
+        return List.of();
+    }
+
     // ── Ray-casting ───────────────────────────────────────────────────────────
 
     /** Standard even-odd ray-casting — works for convex and concave polygons. */
@@ -162,6 +208,13 @@ public class IrisZoneSystem {
         int            count;
         double         sumSpeedKmh;  // sum of vehicle speeds inside (for avg)
         int            incidents;    // wrecked vehicles inside right now
+
+        // Ring buffer des scores de congestion — 60 valeurs (1 par minute, 1 h max).
+        // Lazily allouée à la première écriture pour éviter le gaspillage si
+        // l'historique n'est jamais demandé.
+        double[]       history;
+        int            historyHead = 0;   // prochaine position d'écriture
+        int            historyFill = 0;   // nombre de samples valides ≤ HISTORY_LEN
 
         IrisZone(String codeIris, String nomIris, String typIris,
                  String nomCom, String inseeComm, double[][] polygon) {

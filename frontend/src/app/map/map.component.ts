@@ -18,6 +18,7 @@ import { GeofenceLayerService } from './geofence-layer.service';
 import { TrafficLightLayerService } from './traffic-light-layer.service';
 import { IrisLayerService } from './iris-layer.service';
 import { IncidentDropService } from '../core/incident-drop.service';
+import { RouteHighlightLayerService } from './route-highlight-layer.service';
 import { VehicleRenderer }     from '../vehicles/vehicle-renderer';
 import { TrailRenderer }       from '../vehicles/trail-renderer';
 import { CongestionRenderer }  from '../vehicles/congestion-renderer';
@@ -28,6 +29,7 @@ import { VehicleUpdate }       from '../core/models/vehicle.model';
 import { MapStateService }     from '../core/map-state.service';
 import { DashboardComponent }  from '../dashboard/dashboard.component';
 import { AlertsComponent }     from '../dashboard/alerts.component';
+import { MapLegendComponent }  from './map-legend.component';
 import { environment }         from '../../environments/environment';
 
 const BUILDINGS_LAYER_ID = 'nexus-buildings-3d';
@@ -36,11 +38,12 @@ const UI_UPDATE_INTERVAL_MS = 250;
 @Component({
   selector: 'app-map',
   standalone: true,
-  imports: [CommonModule, DashboardComponent, AlertsComponent],
+  imports: [CommonModule, DashboardComponent, AlertsComponent, MapLegendComponent],
   template: `
     <div #mapContainer class="map-container"></div>
     <app-dashboard></app-dashboard>
     <app-alerts></app-alerts>
+    <app-map-legend></app-map-legend>
   `,
   styles: [`
     :host { display: block; position: relative; width: 100%; height: 100%; }
@@ -64,6 +67,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private trafficLights = inject(TrafficLightLayerService);
   private irisLayer     = inject(IrisLayerService);
   private incidentDrop  = inject(IncidentDropService);
+  private routeHighlight = inject(RouteHighlightLayerService);
 
   private map!: MapLibreMap;
   private vehicleRenderer!: VehicleRenderer;
@@ -236,6 +240,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.geofences.init(this.map);
     this.trafficLights.init(this.map);
     this.irisLayer.init(this.map);
+    this.routeHighlight.init(this.map);
 
     // Re-apply current filter state (style switch resets layer visibility)
     const f = this.selection.filters();

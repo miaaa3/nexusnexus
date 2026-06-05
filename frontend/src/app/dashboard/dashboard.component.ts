@@ -14,7 +14,9 @@ import { MapImportComponent } from './map-import.component';
 import { IrisAnalyticsComponent, IrisFlyToEvent } from './iris-analytics.component';
 import { EventsPanelComponent } from './events-panel.component';
 import { DemoPanelComponent }   from './demo-panel.component';
+import { IrisLayerService } from '../map/iris-layer.service';
 import { VehicleType, VEHICLE_COLORS } from '../core/models/vehicle.model';
+import { environment } from '../../environments/environment';
 
 interface VehicleTypeMeta { type: VehicleType; label: string; color: string; }
 
@@ -194,6 +196,28 @@ interface VehicleTypeMeta { type: VehicleType; label: string; color: string; }
         </button>
       </div>
 
+      @if (filters().irisEnabled) {
+        <div class="panel panel--iris-legend">
+          <div class="iris-legend-head">
+            <span class="iris-legend-title">IRIS</span>
+          </div>
+          <div class="iris-legend-scale">
+            <span class="iris-swatch iris-swatch--empty"></span>
+            <span class="iris-swatch iris-swatch--free"></span>
+            <span class="iris-swatch iris-swatch--mid"></span>
+            <span class="iris-swatch iris-swatch--busy"></span>
+            <span class="iris-swatch iris-swatch--jam"></span>
+          </div>
+          <div class="iris-legend-labels">
+            <span>Empty</span>
+            <span>Free</span>
+            <span>Mod.</span>
+            <span>Busy</span>
+            <span>Jam</span>
+          </div>
+        </div>
+      }
+
       <!-- ── Démo (one-click scenarios) ───────────────────────────────── -->
       <div class="panel">
         <app-demo-panel></app-demo-panel>
@@ -367,6 +391,19 @@ interface VehicleTypeMeta { type: VehicleType; label: string; color: string; }
     .legend-ramp { height:6px; border-radius:999px; background:linear-gradient(90deg,#19e66a 0%,#f4d13d 52%,#ff3148 100%); box-shadow:0 0 14px rgba(244,209,61,.14); }
     .legend-labels { display:flex; align-items:center; justify-content:space-between; font-size:8px; font-weight:700; letter-spacing:.9px; text-transform:uppercase; color:rgba(255,255,255,.34); }
 
+    /* IRIS legend */
+    .panel--iris-legend { display:flex; flex-direction:column; gap:7px; padding:9px 12px; }
+    .iris-legend-head { display:flex; align-items:center; }
+    .iris-legend-title { font-size:9px; font-weight:800; letter-spacing:1.6px; color:rgba(255,255,255,.55); }
+    .iris-legend-scale { display:grid; grid-template-columns:repeat(5, 1fr); gap:4px; }
+    .iris-swatch { height:7px; border-radius:999px; border:1px solid rgba(255,255,255,.16); }
+    .iris-swatch--empty { background:rgba(120,170,210,.28); border-color:rgba(120,170,210,.5); }
+    .iris-swatch--free { background:#2ecc71; border-color:rgba(46,204,113,.8); }
+    .iris-swatch--mid { background:#f1c40f; border-color:rgba(241,196,15,.85); }
+    .iris-swatch--busy { background:#e67e22; border-color:rgba(230,126,34,.9); }
+    .iris-swatch--jam { background:#ff6048; border-color:rgba(255,96,72,.95); }
+    .iris-legend-labels { display:grid; grid-template-columns:repeat(5, 1fr); gap:4px; font-size:7.5px; color:rgba(255,255,255,.36); text-align:center; }
+
     /* Replay */
     .panel--replay { display:flex; flex-direction:column; gap:10px; }
     .replay-header { display:flex; align-items:center; justify-content:space-between; }
@@ -418,6 +455,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   private ws           = inject(WebSocketService);
   private http         = inject(HttpClient);
   private styleService = inject(MapStyleService);
+  private irisLayer    = inject(IrisLayerService);
   readonly sel         = inject(SelectionService);
   readonly replay      = inject(ReplayService);
 
@@ -476,7 +514,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.http.get<{ vehicleCount: number; speedMultiplier: number; paused: boolean }>(
-      'http://localhost:8080/api/simulation/status'
+      `${environment.backendUrl}/api/simulation/status`
     ).subscribe({ next: s => {
       this.vehicleCount    = s.vehicleCount;
       this.speedMultiplier = s.speedMultiplier;
@@ -486,7 +524,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     // Poll traffic status every 2 seconds (simulated time advances 60×)
     const pollTraffic = () => {
       this.http.get<{ mode: string; simulatedTime: string }>(
-        'http://localhost:8080/api/simulation/traffic'
+        `${environment.backendUrl}/api/simulation/traffic`
       ).subscribe({ next: t => {
         this.trafficMode = t.mode;
         this.simTime     = t.simulatedTime;
@@ -508,6 +546,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     // Make sure the IRIS layer is visible before flying — otherwise the user
     // lands on the zone but the choropleth is hidden.
     if (!this.sel.filters().irisEnabled) this.sel.toggleIris();
+    this.irisLayer.selectZone(e.codeIris);
     this.mapState.panTo(e.lon, e.lat);
   }
 
@@ -530,23 +569,23 @@ export class DashboardComponent implements OnInit, OnDestroy {
     const mode = this.overrideCycle[this.overrideCycleIdx];
     this.trafficOverride = mode;
     const param = mode ? `?mode=${mode}` : '';
-    this.http.post(`http://localhost:8080/api/simulation/traffic/override${param}`, null)
+    this.http.post(`${environment.backendUrl}/api/simulation/traffic/override${param}`, null)
       .subscribe();
   }
 
   togglePause(): void {
     const endpoint = this.paused ? 'resume' : 'pause';
-    this.http.post(`http://localhost:8080/api/simulation/${endpoint}`, null)
+    this.http.post(`${environment.backendUrl}/api/simulation/${endpoint}`, null)
       .subscribe({ next: () => { this.paused = !this.paused; } });
   }
 
   applyVehicleCount(): void {
-    this.http.post(`http://localhost:8080/api/simulation/vehicles`, null,
+    this.http.post(`${environment.backendUrl}/api/simulation/vehicles`, null,
       { params: { count: this.vehicleCount } }).subscribe();
   }
 
   applySpeed(): void {
-    this.http.post(`http://localhost:8080/api/simulation/speed`, null,
+    this.http.post(`${environment.backendUrl}/api/simulation/speed`, null,
       { params: { multiplier: this.speedMultiplier } }).subscribe();
   }
 

@@ -40,8 +40,31 @@ export interface IrisFlyToEvent {
     <div class="iris-card">
       <div class="iris-header">
         <span class="iris-title">ANALYSE TERRITORIALE</span>
-        <span class="iris-sub">Top {{ rows().length || 5 }} IRIS · congestion</span>
+        <span class="iris-sub">Top {{ rows().length || 5 }} · congestion</span>
       </div>
+
+      @if (status().loaded) {
+        <div class="iris-summary">
+          <div class="iris-stat">
+            <div class="iris-stat-val">{{ status().zoneCount }}</div>
+            <div class="iris-stat-lbl">IRIS</div>
+          </div>
+          <div class="iris-stat">
+            <div class="iris-stat-val" style="color:#3d9eff">{{ status().active }}</div>
+            <div class="iris-stat-lbl">actifs</div>
+          </div>
+          <div class="iris-stat">
+            <div class="iris-stat-val" style="color:#e67e22">{{ status().trouble }}</div>
+            <div class="iris-stat-lbl">chargés</div>
+          </div>
+          <div class="iris-stat">
+            <div class="iris-stat-val" style="color:#e74c3c">{{ status().heavy }}</div>
+            <div class="iris-stat-lbl">engorgés</div>
+          </div>
+        </div>
+      } @else {
+        <div class="iris-empty">IRIS pas encore chargé.</div>
+      }
 
       @if (loading() && !rows().length) {
         <div class="iris-empty">Chargement…</div>
@@ -96,6 +119,32 @@ export interface IrisFlyToEvent {
     .iris-empty {
       font-size: 11px; color: rgba(255,255,255,.4);
       padding: 6px 4px;
+    }
+
+    .iris-summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 5px;
+      padding: 7px 8px;
+      background: rgba(255,255,255,.03);
+      border: 1px solid rgba(255,255,255,.06);
+      border-radius: 7px;
+    }
+    .iris-stat {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 1px;
+    }
+    .iris-stat-val {
+      font-size: 15px; font-weight: 700;
+      color: rgba(255,255,255,.92);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.1;
+    }
+    .iris-stat-lbl {
+      font-size: 9px;
+      letter-spacing: .8px;
+      color: rgba(255,255,255,.5);
+      text-transform: uppercase;
     }
 
     .iris-list {
@@ -175,13 +224,22 @@ export class IrisAnalyticsComponent implements OnInit, OnDestroy {
   readonly rows    = signal<IrisCongestionRow[]>([]);
   readonly loading = signal<boolean>(true);
 
+  /** Compteurs agrégés du panneau (header). */
+  readonly status = signal<{
+    loaded: boolean; zoneCount: number; active: number; trouble: number; heavy: number;
+  }>({ loaded: false, zoneCount: 0, active: 0, trouble: 0, heavy: 0 });
+
   @Output() flyTo = new EventEmitter<IrisFlyToEvent>();
 
   private pollTimer?: ReturnType<typeof setInterval>;
 
   ngOnInit(): void {
     this.refresh();
-    this.pollTimer = setInterval(() => this.refresh(), IrisAnalyticsComponent.POLL_MS);
+    this.refreshStatus();
+    this.pollTimer = setInterval(() => {
+      this.refresh();
+      this.refreshStatus();
+    }, IrisAnalyticsComponent.POLL_MS);
   }
 
   ngOnDestroy(): void {
@@ -216,6 +274,16 @@ export class IrisAnalyticsComponent implements OnInit, OnDestroy {
         // Backend still warming up / IRIS not yet loaded — keep last good list.
         this.loading.set(false);
       },
+    });
+  }
+
+  /** Récupère les compteurs agrégés pour le header. */
+  private refreshStatus(): void {
+    this.http.get<{
+      loaded: boolean; zoneCount: number; active: number; trouble: number; heavy: number;
+    }>(`${environment.backendUrl}/api/iris/status`).subscribe({
+      next: s => this.status.set(s ?? this.status()),
+      error: () => {},
     });
   }
 }

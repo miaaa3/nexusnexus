@@ -72,6 +72,17 @@ desktop.ini
 build/
 out/
 
+# ── Generated documentation previews ─────────────────────────────────────────
+docs/render_*/
+
+# ── Local reports / presentation notes (not committed) ───────────────────────
+docs/
+*.pdf
+*.docx
+*_SUMMARY.md
+FEATURES.md
+CUSTOM_OSM_MAP.md
+
 # ── Misc Claude / agent scratch ──────────────────────────────────────────────
 .claude/
 .cowork/

@@ -3,6 +3,7 @@ import { Client, IMessage, StompSubscription } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
 import { Subject } from 'rxjs';
 import { SimulationFrame, VehicleUpdate } from '../core/models/vehicle.model';
+import { environment } from '../../environments/environment';
 
 export type WsStatus = 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR';
 
@@ -51,7 +52,7 @@ export class WebSocketService implements OnDestroy {
   private latestVehicleCount = 0;
   private latestReceiveTime = 0;
 
-  connect(url: string = 'http://localhost:8080/ws'): void {
+  connect(url: string = `${environment.backendUrl}/ws`): void {
     if (this.client?.connected) return;
 
     this.client = new Client({

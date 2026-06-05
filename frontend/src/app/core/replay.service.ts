@@ -2,6 +2,7 @@ import { Injectable, signal, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Subject } from 'rxjs';
 import { SimulationFrame } from './models/vehicle.model';
+import { environment } from '../../environments/environment';
 
 export type ReplayState = 'idle' | 'loading' | 'ready' | 'playing' | 'paused';
 
@@ -19,7 +20,7 @@ export type ReplayState = 'idle' | 'loading' | 'ready' | 'playing' | 'paused';
 export class ReplayService {
 
   private http = inject(HttpClient);
-  private readonly API = 'http://localhost:8080/api/replay';
+  private readonly API = `${environment.backendUrl}/api/replay`;
 
   // ── Public state ────────────────────────────────────────────────────────────
   readonly state       = signal<ReplayState>('idle');

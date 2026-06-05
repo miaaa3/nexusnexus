@@ -30,6 +30,7 @@ export class IrisLayerService implements OnDestroy {
   private readonly SOURCE_ID  = 'nexus-iris';
   private readonly FILL_ID    = 'nexus-iris-fill';
   private readonly LINE_ID    = 'nexus-iris-line';
+  private readonly HILITE_ID  = 'nexus-iris-highlight';
   private readonly LABEL_ID   = 'nexus-iris-label';
   private readonly POLL_MS    = 3_000;
 
@@ -38,6 +39,7 @@ export class IrisLayerService implements OnDestroy {
   private pollTimer?: ReturnType<typeof setInterval>;
   private visible = false;
   private ready   = false;
+  private selectedCodeIris: string | null = null;
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -58,6 +60,11 @@ export class IrisLayerService implements OnDestroy {
   }
 
   isReady(): boolean { return this.ready; }
+
+  selectZone(codeIris: string | null): void {
+    this.selectedCodeIris = codeIris;
+    this.updateHighlightFilter();
+  }
 
   /**
    * Look up the bounding-box centroid for an IRIS code from the cached
@@ -157,6 +164,7 @@ export class IrisLayerService implements OnDestroy {
           nomIris, codeIris, typIris, nomCom, inseeComm,
           vehicleCount, density, avgSpeedKmh, incidentCount, congestionScore,
         } = f.properties;
+        this.selectZone(codeIris ?? null);
         const typeLabel: Record<string, string> = {
           H: 'Habitat', A: 'Activité', D: 'Divers', Z: 'Zone spéciale',
         };
@@ -170,7 +178,9 @@ export class IrisLayerService implements OnDestroy {
                       : cs < 0.50 ? 'modéré'
                       : cs < 0.75 ? 'dense'
                       : 'engorgé';
-        new (window as any).maplibregl.Popup({ className: 'nexus-popup', maxWidth: '300px' })
+        // ID unique pour pouvoir cibler la sparkline une fois la fetch arrivée
+        const sparkId = 'iris-spark-' + codeIris;
+        new (window as any).maplibregl.Popup({ className: 'nexus-popup', maxWidth: '320px' })
           .setLngLat(e.lngLat)
           .setHTML(`
             <div style="line-height:1.55">
@@ -192,23 +202,80 @@ export class IrisLayerService implements OnDestroy {
               <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:3px">
                 <div style="height:100%;width:${csPct}%;background:${csColor}"></div>
               </div>
+              <hr style="margin:8px 0 6px;opacity:.2">
+              <div style="font-size:10px;opacity:.65;letter-spacing:.6px;margin-bottom:2px">
+                HISTORIQUE 1 H
+              </div>
+              <div id="${sparkId}" style="height:42px">
+                <span style="font-size:10.5px;opacity:.5">chargement…</span>
+              </div>
             </div>
           `)
           .addTo(map);
+        // Fetch + injection sparkline async (non bloquant pour l'ouverture du popup).
+        this.fetchAndDrawSparkline(codeIris, sparkId);
       });
       map.on('mouseenter', this.FILL_ID, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', this.FILL_ID, () => { map.getCanvas().style.cursor = 'crosshair'; });
     }
 
-    // ── Outline ───────────────────────────────────────────────────────────────
+    // ── Outline — bordures colorées par TYPE d'IRIS (H/A/D/Z) ───────────────
+    // Le fond (fill) reste coloré par congestion, la bordure par type :
+    //   H = Habitat       → bleu       (zones résidentielles)
+    //   A = Activité      → orange     (zones commerciales / industrielles)
+    //   D = Divers        → violet     (zones mixtes)
+    //   Z = Zone spéciale → vert       (parcs, gares, équipements)
+    // Bordures toujours visibles (même quand la zone est vide / fluide).
     if (!map.getLayer(this.LINE_ID)) {
       map.addLayer({
         id:     this.LINE_ID,
         type:   'line',
         source: this.SOURCE_ID,
         paint: {
-          'line-color': 'rgba(80,160,255,0.35)',
-          'line-width': 0.7,
+          'line-color': [
+            'match', ['get', 'typIris'],
+            'H', 'rgba(61, 158, 255, 0.95)',   // bleu — habitat
+            'A', 'rgba(230, 126,  34, 0.95)',  // orange — activité
+            'D', 'rgba(155,  89, 182, 0.95)',  // violet — divers
+            'Z', 'rgba( 46, 204, 113, 0.95)',  // vert — zone spéciale
+            /* défaut */ 'rgba(160, 180, 200, 0.80)',
+          ],
+          'line-opacity': 0.92,
+          'line-width': [
+            'interpolate', ['linear'],
+            ['zoom'],
+            10, 0.9,
+            13, 1.6,
+            16, 2.6,
+          ],
+          'line-blur': 0.10,
+        },
+        layout: {
+          visibility: 'none',
+          'line-join': 'round',
+          'line-cap':  'round',
+        },
+      });
+    }
+
+    // ── Selected IRIS highlight ──────────────────────────────────────────────
+    if (!map.getLayer(this.HILITE_ID)) {
+      map.addLayer({
+        id:     this.HILITE_ID,
+        type:   'line',
+        source: this.SOURCE_ID,
+        filter: ['==', ['get', 'codeIris'], this.selectedCodeIris ?? ''],
+        paint: {
+          'line-color': 'rgba(255,255,255,0.95)',
+          'line-width': [
+            'interpolate', ['linear'],
+            ['zoom'],
+            10, 2.2,
+            13, 3.4,
+            16, 5.0,
+          ],
+          'line-opacity': 0.98,
+          'line-blur': 0.25,
         },
         layout: { visibility: 'none' },
       });
@@ -245,6 +312,106 @@ export class IrisLayerService implements OnDestroy {
    * Fetch lightweight counts and update each feature's vehicleCount + density
    * so MapLibre automatically re-evaluates the choropleth expression.
    */
+  /**
+   * Récupère l'historique de congestion 1 h d'une zone et dessine une
+   * sparkline SVG dans l'élément {@code #containerId} du popup.
+   *
+   * Le rendu utilise un polyline SVG simple, sans librairie de charts.
+   * Couleurs interpolées : vert (0%) → rouge (100%).
+   */
+  private fetchAndDrawSparkline(codeIris: string, containerId: string): void {
+    this.http.get<{ codeIris: string; points: number[] }>(
+      `${environment.backendUrl}/api/iris/${codeIris}/history`
+    ).subscribe({
+      next: data => {
+        const el = document.getElementById(containerId);
+        if (!el) return;       // popup déjà fermé
+        const pts = data?.points ?? [];
+        if (pts.length === 0) {
+          el.innerHTML =
+            `<span style="font-size:10.5px;opacity:.5">` +
+            `Données insuffisantes (vient juste d'être chargé).</span>`;
+          return;
+        }
+        el.innerHTML = this.buildSparklineSVG(pts);
+      },
+      error: () => {
+        const el = document.getElementById(containerId);
+        if (el) el.innerHTML =
+          `<span style="font-size:10.5px;opacity:.5">Historique indisponible.</span>`;
+      },
+    });
+  }
+
+  /** Construit un SVG sparkline à partir d'un tableau de scores [0..1]. */
+  private buildSparklineSVG(points: number[]): string {
+    const W = 280;
+    const H = 42;
+    const PAD = 4;
+    const n  = points.length;
+    if (n === 0) return '';
+
+    const stepX = (W - 2 * PAD) / Math.max(n - 1, 1);
+    // Convertit chaque score en coord SVG (origine en haut à gauche → on inverse Y)
+    const xy = points.map((v, i) => {
+      const clamped = Math.max(0, Math.min(1, v));
+      return [
+        PAD + i * stepX,
+        H - PAD - clamped * (H - 2 * PAD),
+      ];
+    });
+
+    // Polyline pour la ligne
+    const linePts = xy.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+    // Polygone pour l'aire en dessous (effet glow + fill dégradé)
+    const areaPts = `${PAD},${H - PAD} ${linePts} ${(W - PAD).toFixed(1)},${H - PAD}`;
+
+    // Dernier point + indicateur
+    const last = xy[n - 1];
+    const lastScore = points[n - 1];
+    const lastColor = lastScore < 0.25 ? '#2ecc71'
+                    : lastScore < 0.50 ? '#f1c40f'
+                    : lastScore < 0.75 ? '#e67e22'
+                    : '#e74c3c';
+    // Tendance : compare le dernier au plus ancien
+    const trend = lastScore - points[0];
+    const trendArrow = trend >  0.05 ? '▲'
+                     : trend < -0.05 ? '▼'
+                     : '→';
+    const trendColor = trend >  0.05 ? '#e74c3c'
+                     : trend < -0.05 ? '#2ecc71'
+                     : '#94a3b8';
+
+    return `
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}"
+           preserveAspectRatio="none"
+           style="display:block">
+        <defs>
+          <linearGradient id="sg-${Date.now()}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"  stop-color="${lastColor}" stop-opacity="0.38"/>
+            <stop offset="100%" stop-color="${lastColor}" stop-opacity="0.04"/>
+          </linearGradient>
+        </defs>
+        <polygon points="${areaPts}" fill="url(#sg-${Date.now()})"/>
+        <polyline points="${linePts}"
+                  fill="none"
+                  stroke="${lastColor}"
+                  stroke-width="1.6"
+                  stroke-linejoin="round"
+                  stroke-linecap="round"/>
+        <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}"
+                r="2.6" fill="${lastColor}" stroke="#0a0e1a" stroke-width="0.8"/>
+      </svg>
+      <div style="display:flex;justify-content:space-between;font-size:9.5px;
+                  opacity:.7;margin-top:2px">
+        <span>il y a ${n} min</span>
+        <span><span style="color:${trendColor}">${trendArrow}</span>
+              tendance ${trend > 0 ? '+' : ''}${Math.round(trend * 100)} %</span>
+        <span>maintenant</span>
+      </div>
+    `;
+  }
+
   private refreshCounts(): void {
     if (!this.map || !this.visible) return;
     this.http.get<Record<string, {
@@ -279,11 +446,17 @@ export class IrisLayerService implements OnDestroy {
 
   private setLayerVisibility(v: 'visible' | 'none'): void {
     if (!this.map) return;
-    for (const id of [this.FILL_ID, this.LINE_ID, this.LABEL_ID]) {
+    for (const id of [this.FILL_ID, this.LINE_ID, this.HILITE_ID, this.LABEL_ID]) {
       if (this.map.getLayer(id)) {
         this.map.setLayoutProperty(id, 'visibility', v);
       }
     }
+  }
+
+  private updateHighlightFilter(): void {
+    if (!this.map?.getLayer(this.HILITE_ID)) return;
+    this.map.setFilter(this.HILITE_ID, ['==', ['get', 'codeIris'], this.selectedCodeIris ?? '']);
+    this.map.setLayoutProperty(this.HILITE_ID, 'visibility', this.visible && this.selectedCodeIris ? 'visible' : 'none');
   }
 
   private cleanup(): void {

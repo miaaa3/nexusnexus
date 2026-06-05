@@ -77,6 +77,15 @@ public class VehicleBroadcaster {
         messagingTemplate.convertAndSend("/topic/vehicles", out);
     }
 
+    /**
+     * Échantillonne le score de congestion de chaque IRIS dans son ring buffer
+     * 1 fois par minute. Alimente l'historique 1 h affiché dans le popup IRIS.
+     */
+    @Scheduled(fixedRate = 60_000L)
+    public void sampleIrisHistory() {
+        simulationEngine.sampleIrisHistory();
+    }
+
     // ── Frame builders ───────────────────────────────────────────────────────
 
     private SimulationFrame buildKeyframe(long now, int total, List<VehicleUpdate> current) {

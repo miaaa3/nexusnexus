@@ -7,7 +7,7 @@ import { VehicleUpdate } from '../core/models/vehicle.model';
  * Strategy:
  * - On map click, project all nearby vehicles (from SpatialGrid) to pixel space
  * - Find closest one within HIT_RADIUS_PX pixels
- * - O(k) where k = vehicles in nearby cells — typically <100 even with 5000 total
+ * - O(k) where k = vehicles in nearby cells — usually small even with a 20K fleet
  */
 export class VehicleSelector {
   private static readonly HIT_RADIUS_PX = 18;

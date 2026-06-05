@@ -4,6 +4,7 @@ import com.nexus.config.SimulationConfig;
 import com.nexus.model.IncidentUpdate;
 import com.nexus.model.IrisZoneStatus;
 import com.nexus.model.LightUpdate;
+import com.nexus.model.RouteResponse;
 import com.nexus.model.Vehicle;
 import com.nexus.model.VehicleType;
 import com.nexus.model.VehicleUpdate;
@@ -543,6 +544,50 @@ public class SimulationEngine {
      * One {@link IncidentUpdate} per wrecked vehicle; severity scales with vehicle type
      * (truck/bus crashes are flagged worse than car crashes).
      */
+    /**
+     * Construit la route restante d'un véhicule sous forme de
+     * coordonnées {@code [lon, lat]}, prête à être dessinée par MapLibre.
+     *
+     * <p>La route commence par la position courante (entre fromNode et toNode,
+     * interpolée selon routeProgress) puis enchaîne tous les nœuds restants
+     * de routePath jusqu'à la destination. Renvoie {@code null} si le véhicule
+     * est introuvable, ou si sa route est invalide.
+     */
+    public RouteResponse vehicleRoute(String vehicleId) {
+        simulationLock.readLock().lock();
+        try {
+            if (graph == null) return null;
+            Vehicle target = null;
+            for (Vehicle v : vehicles) {
+                if (v.getId().equals(vehicleId)) { target = v; break; }
+            }
+            if (target == null) return null;
+
+            List<Long> path = target.getRoutePath();
+            int idx = target.getRoutePathIndex();
+            if (path == null || path.size() < 2 || idx + 1 >= path.size()) {
+                return null;
+            }
+
+            List<double[]> coords = new ArrayList<>();
+            // Point courant : (lat, lon) actuel du véhicule (interpolé entre
+            // les nœuds via routeProgress par advanceOnRoad).
+            coords.add(new double[] { target.getLongitude(), target.getLatitude() });
+
+            // Reste du chemin : tous les nœuds depuis toNode (= idx+1) jusqu'à la fin.
+            for (int i = idx + 1; i < path.size(); i++) {
+                double[] c = graph.getNode(path.get(i));
+                if (c == null) continue;
+                coords.add(new double[] { c[1], c[0] });   // [lon, lat]
+            }
+
+            if (coords.size() < 2) return null;
+            return new RouteResponse(vehicleId, coords, 0, coords.size() - 1);
+        } finally {
+            simulationLock.readLock().unlock();
+        }
+    }
+
     public List<IncidentUpdate> eventsSnapshot() {
         simulationLock.readLock().lock();
         try {
@@ -606,6 +651,23 @@ public class SimulationEngine {
 
     public boolean isIrisLoaded() { return irisZones.isLoaded(); }
     public int     irisZoneCount() { return irisZones.size(); }
+
+    /** Récupère l'historique 1 h d'une zone IRIS (max 60 samples, du + ancien au + récent). */
+    public List<Double> irisHistory(String codeIris) {
+        simulationLock.readLock().lock();
+        try { return irisZones.historyForCode(codeIris); }
+        finally { simulationLock.readLock().unlock(); }
+    }
+
+    /**
+     * Échantillonne l'historique de congestion de chaque IRIS — appelé
+     * 1× par minute via @Scheduled depuis VehicleBroadcaster.
+     */
+    public void sampleIrisHistory() {
+        simulationLock.readLock().lock();
+        try { irisZones.recordHistorySample(); }
+        finally { simulationLock.readLock().unlock(); }
+    }
 
     /**
      * Local-file-first IRIS load: tries {@code config.irisLocalFile} (when

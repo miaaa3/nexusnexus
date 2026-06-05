@@ -16,7 +16,7 @@ export class SpatialGrid {
   private readonly cells = new Map<number, VehicleUpdate[]>();
   private allVehicles: VehicleUpdate[] = [];
 
-  constructor(cellSize = 0.01) {   // ~1 km cells at Paris latitude
+  constructor(cellSize = 0.01) {   // ~1 km cells at mid-latitude city scale
     this.cellSize = cellSize;
   }
 

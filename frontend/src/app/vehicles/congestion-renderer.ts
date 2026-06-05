@@ -32,7 +32,7 @@ export class CongestionRenderer {
   private map!: MapLibreMap;
   private uMatrix!: WebGLUniformLocation;
 
-  // Grid configuration — covers Paris bounding box
+  // Grid configuration — covers the default demo city extent
   private readonly LAT_MIN = 48.82;
   private readonly LAT_MAX = 48.90;
   private readonly LON_MIN = 2.28;

@@ -2,6 +2,7 @@ package com.nexus.controller;
 
 import com.nexus.model.IncidentUpdate;
 import com.nexus.model.LightUpdate;
+import com.nexus.model.RouteResponse;
 import com.nexus.model.ZoneStatus;
 import com.nexus.simulation.SimulationEngine;
 import com.nexus.simulation.TrafficMode;
@@ -93,6 +94,21 @@ public class SimulationController {
     @GetMapping("/incidents/history")
     public ResponseEntity<List<IncidentUpdate>> getIncidentHistory() {
         return ResponseEntity.ok(simulationEngine.incidentHistory());
+    }
+
+    /**
+     * Route restante d'un véhicule donné — alimente le calque
+     * « route highlight » qui dessine sur la carte le chemin du véhicule
+     * sélectionné.
+     *
+     * <p>Réponse 200 avec la liste des coords ; 404 si véhicule inconnu ou
+     * route invalide.
+     */
+    @GetMapping("/vehicles/{id}/route")
+    public ResponseEntity<RouteResponse> getVehicleRoute(@PathVariable("id") String id) {
+        RouteResponse r = simulationEngine.vehicleRoute(id);
+        return r == null ? ResponseEntity.notFound().build()
+                         : ResponseEntity.ok(r);
     }
 
     /**

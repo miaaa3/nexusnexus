@@ -40,9 +40,23 @@ public class IrisController {
      */
     @GetMapping("/status")
     public ResponseEntity<Map<String, Object>> getStatus() {
+        // Compteurs agrégés pour le header du panneau Analyse territoriale.
+        List<IrisZoneStatus> zones = simulationEngine.irisZonesSnapshot();
+        int active  = 0;     // ≥ 1 véhicule
+        int heavy   = 0;     // congestion ≥ 0.70 — engorgés
+        int trouble = 0;     // congestion ≥ 0.50 — chargés
+        for (IrisZoneStatus z : zones) {
+            if (z.vehicleCount() == 0) continue;
+            active++;
+            if (z.congestionScore() >= 0.50) trouble++;
+            if (z.congestionScore() >= 0.70) heavy++;
+        }
         return ResponseEntity.ok(Map.of(
-                "loaded",    simulationEngine.isIrisLoaded(),
-                "zoneCount", simulationEngine.irisZoneCount()
+                "loaded",     simulationEngine.isIrisLoaded(),
+                "zoneCount",  simulationEngine.irisZoneCount(),
+                "active",     active,
+                "trouble",    trouble,
+                "heavy",      heavy
         ));
     }
 
@@ -57,6 +71,22 @@ public class IrisController {
     public ResponseEntity<Map<String, Object>> reload() {
         int n = simulationEngine.reloadIris();
         return ResponseEntity.ok(Map.of("zoneCount", n));
+    }
+
+    /**
+     * Historique du score de congestion (1 valeur par minute, max 60).
+     * Renvoie {@code {codeIris, points: [..]}} avec points en ordre chronologique
+     * (le dernier étant le plus récent). Liste vide si la zone est inconnue
+     * ou n'a pas encore d'échantillon.
+     */
+    @GetMapping("/{codeIris}/history")
+    public ResponseEntity<Map<String, Object>> getHistory(
+            @org.springframework.web.bind.annotation.PathVariable("codeIris") String codeIris) {
+        List<Double> points = simulationEngine.irisHistory(codeIris);
+        Map<String, Object> out = new HashMap<>();
+        out.put("codeIris", codeIris);
+        out.put("points",   points);
+        return ResponseEntity.ok(out);
     }
 
     // ── Full zone payload (called once on init) ───────────────────────────────
