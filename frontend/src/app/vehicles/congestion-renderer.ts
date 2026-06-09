@@ -32,16 +32,19 @@ export class CongestionRenderer {
   private map!: MapLibreMap;
   private uMatrix!: WebGLUniformLocation;
 
-  // Grid configuration — covers the default demo city extent
-  private readonly LAT_MIN = 48.82;
-  private readonly LAT_MAX = 48.90;
-  private readonly LON_MIN = 2.28;
-  private readonly LON_MAX = 2.42;
+  // Grid configuration — dimensions are fixed (40×30 cells = 1200 instances),
+  // but the *bounds* come from the backend's loaded road graph so the grid
+  // sits over the actual simulated area. The hard-coded Paris fallback only
+  // kicks in when the backend has not finished loading the OSM yet.
+  private readonly LAT_MIN: number;
+  private readonly LAT_MAX: number;
+  private readonly LON_MIN: number;
+  private readonly LON_MAX: number;
   private readonly COLS = 40;
   private readonly ROWS = 30;
 
-  private readonly CELL_LON = (this.LON_MAX - this.LON_MIN) / this.COLS;
-  private readonly CELL_LAT = (this.LAT_MAX - this.LAT_MIN) / this.ROWS;
+  private readonly CELL_LON: number;
+  private readonly CELL_LAT: number;
 
   private readonly FLOATS_PER_CELL = 5;
   private readonly TOTAL_CELLS = this.COLS * this.ROWS;
@@ -56,7 +59,16 @@ export class CongestionRenderer {
   private readonly cellHW: number;   // half-width in mercator
   private readonly cellHH: number;   // half-height in mercator
 
-  constructor() {
+  constructor(bounds?: { minLat: number; maxLat: number; minLon: number; maxLon: number }) {
+    // Fallback: original Paris extent — only used if the backend hasn't
+    // returned its graph bounds yet (e.g. /api/simulation/bounds in flight).
+    this.LAT_MIN = bounds?.minLat ?? 48.82;
+    this.LAT_MAX = bounds?.maxLat ?? 48.90;
+    this.LON_MIN = bounds?.minLon ?? 2.28;
+    this.LON_MAX = bounds?.maxLon ?? 2.42;
+    this.CELL_LON = (this.LON_MAX - this.LON_MIN) / this.COLS;
+    this.CELL_LAT = (this.LAT_MAX - this.LAT_MIN) / this.ROWS;
+
     this.instanceData = new Float32Array(this.TOTAL_CELLS * this.FLOATS_PER_CELL);
     this.cellCounts   = new Uint16Array(this.TOTAL_CELLS);
     this.cellSpeedSum = new Float32Array(this.TOTAL_CELLS);
@@ -115,9 +127,17 @@ export class CongestionRenderer {
 
   /**
    * Recompute congestion scores from the current vehicle positions.
-   * Called at ~2Hz from MapComponent to avoid per-frame overhead.
+   * Called at ~2 Hz from MapComponent to avoid per-frame overhead.
+   *
+   * @returns Aggregate stats over all populated cells:
+   *   - {@code avg}: mean congestion across cells that contain at least one
+   *     vehicle. Cells empty of vehicles are excluded so the average is not
+   *     dragged to ~0 by all the rural cells.
+   *   - {@code max}: peak congestion across the same set. Drives the
+   *     dashboard's "Congestion 0% PEAK" widget.
+   *   Returns {@code {avg:0, max:0}} when no vehicle is on the map.
    */
-  updateVehicles(vehicles: VehicleUpdate[]): void {
+  updateVehicles(vehicles: VehicleUpdate[]): { avg: number; max: number } {
     // Reset accumulators
     this.cellCounts.fill(0);
     this.cellSpeedSum.fill(0);
@@ -138,7 +158,10 @@ export class CongestionRenderer {
       if (this.cellCounts[i] > maxDensity) maxDensity = this.cellCounts[i];
     }
 
-    // Build instance buffer
+    // Build instance buffer + aggregate stats for the dashboard chart.
+    let sumScore = 0;
+    let populated = 0;
+    let peak = 0;
     for (let i = 0; i < this.TOTAL_CELLS; i++) {
       const count = this.cellCounts[i];
       const base  = i * this.FLOATS_PER_CELL;
@@ -153,13 +176,28 @@ export class CongestionRenderer {
       } else {
         const avgSpeed   = this.cellSpeedSum[i] / count;
         const density    = count / maxDensity;
-        // High density + low speed = high congestion
-        const congestion = density * (1 - avgSpeed / 120);
-        this.instanceData[base + 4] = Math.min(1, Math.max(0, congestion));
+        // Two-term score: a presence floor (so any populated cell shows green
+        // tint) plus a punishing speed-deficit penalty that lights up the
+        // cell red when traffic crawls. The earlier formula multiplied the
+        // two together, so a single vehicle in a fast cell scored ~0.01 and
+        // got discarded — the layer looked broken even when traffic was
+        // active. Now even sparse fleets show a visible flow pattern.
+        const presence      = Math.min(1, density * 1.5 + 0.2);
+        const speedDeficit  = Math.max(0, 1 - avgSpeed / 50);
+        const congestion    = presence * (0.35 + 0.65 * speedDeficit);
+        const clamped       = Math.min(1, Math.max(0, congestion));
+        this.instanceData[base + 4] = clamped;
+        sumScore += clamped;
+        populated++;
+        if (clamped > peak) peak = clamped;
       }
     }
 
     this.map?.triggerRepaint();
+    return {
+      avg: populated > 0 ? sumScore / populated : 0,
+      max: peak,
+    };
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -259,13 +297,15 @@ vec3 congestionColor(float t) {
 }
 
 void main() {
-  if (v_score < 0.05) discard;   // empty cells invisible
+  if (v_score < 0.02) discard;   // empty cells invisible
 
   vec3 color = congestionColor(v_score);
   // Soft edge fade so cells blend nicely
   vec2 uv = abs(v_uv);
   float fade = 1.0 - smoothstep(0.7, 1.0, max(uv.x, uv.y));
-  float alpha = v_score * 0.45 * fade;
+  // Boost low-density opacity so a green flow is still readable; high
+  // congestion still saturates because the linear term keeps growing.
+  float alpha = clamp(0.18 + v_score * 0.55, 0.0, 0.75) * fade;
 
   fragColor = vec4(color, alpha);
 }

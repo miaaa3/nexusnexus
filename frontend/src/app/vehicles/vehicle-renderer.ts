@@ -2,6 +2,15 @@ import { Map as MapLibreMap } from 'maplibre-gl';
 import { VehicleUpdate, VEHICLE_COLORS, VEHICLE_SIZES, WRECK_COLOR, WRECK_SIZE } from '../core/models/vehicle.model';
 
 /**
+ * Squared mercator-distance threshold above which a frame-to-frame jump is
+ * treated as a backend re-spawn rather than honest movement. 0.0005 mercator
+ * units ≈ 55 m at Paris latitude; squared = 2.5e-7. A car at 250 km/h covers
+ * ~14 m in 200 ms, well under the threshold, so honest fast vehicles still
+ * interpolate; only true teleports get snapped.
+ */
+const TELEPORT_SQ_THRESHOLD = 2.5e-7;
+
+/**
  * WebGL2 custom layer for instanced vehicle rendering.
  *
  * Buffer layout per instance (10 floats × 4 bytes = 40 bytes/vehicle):
@@ -41,9 +50,17 @@ export class VehicleRenderer {
 
   private prevPositions: Float32Array;
   private nextPositions: Float32Array;
-  private prevTimestamp = 0;
-  private nextTimestamp = 0;
   private vehicleCount = 0;
+
+  // ── Interpolation timing ────────────────────────────────────────────────────
+  // We interpolate prev → next over the duration that elapsed between the last
+  // two WS frames, using the *client* monotonic clock (performance.now()).
+  // Mixing client and server clocks (e.g. `performance.now() - serverTimestamp`)
+  // is meaningless — server epoch ms vs client page-load ms are billions apart,
+  // which is what produced the "vehicles look frozen" symptom: alpha clamped
+  // to 0 every frame, so positions never advanced between WS arrivals.
+  private lastFrameClientMs = 0;     // performance.now() at last updateVehicles
+  private interpSpanMs      = 200;   // running estimate of inter-frame interval
 
   // Compact slot map — reassigned every frame so slots 0..N-1 always hold visible vehicles.
   private idToSlot = new Map<string, number>();
@@ -96,6 +113,13 @@ export class VehicleRenderer {
     gl2.blendFunc(gl2.SRC_ALPHA, gl2.ONE_MINUS_SRC_ALPHA);
     gl2.drawArraysInstanced(gl2.TRIANGLE_FAN, 0, 4, this.vehicleCount);
     gl2.bindVertexArray(null);
+
+    // Keep MapLibre painting until interpolation finishes. Without this the
+    // canvas only repaints when updateVehicles() calls triggerRepaint() — i.e.
+    // at the WS broadcast rate (~5 Hz at 5 K vehicles), which makes the fleet
+    // look static between frames. While alpha < 1 we ask for another tick so
+    // positions advance every animation frame.
+    if (alpha < 1) this.map?.triggerRepaint();
   }
 
   onRemove(_map: MapLibreMap, gl: WebGL2RenderingContext | WebGLRenderingContext): void {
@@ -106,9 +130,21 @@ export class VehicleRenderer {
     gl2.deleteVertexArray(this.vao);
   }
 
-  updateVehicles(vehicles: VehicleUpdate[], timestamp: number): void {
-    this.prevTimestamp = this.nextTimestamp;
-    this.nextTimestamp = timestamp;
+  updateVehicles(vehicles: VehicleUpdate[], _timestamp: number): void {
+    // Use the client monotonic clock for interpolation timing. The server
+    // timestamp is kept on the wire for the dashboard latency widget, but
+    // it cannot be subtracted from performance.now() — different reference
+    // frames — so we measure the *client-side* gap between two arrivals and
+    // animate over that span.
+    const clientNow = performance.now();
+    if (this.lastFrameClientMs > 0) {
+      const observedSpan = clientNow - this.lastFrameClientMs;
+      // EMA smooths jitter caused by occasional late frames; clamp keeps us
+      // sane if the WS stream pauses (e.g. user switched tabs).
+      const clampedSpan = Math.min(1_000, Math.max(50, observedSpan));
+      this.interpSpanMs = this.interpSpanMs * 0.6 + clampedSpan * 0.4;
+    }
+    this.lastFrameClientMs = clientNow;
 
     // Compact reassignment: visible vehicles always occupy slots 0..N-1.
     // This is the key correctness requirement — drawArraysInstanced draws
@@ -124,9 +160,28 @@ export class VehicleRenderer {
 
       // For interpolation: use last known position so vehicles glide smoothly
       // even after re-entering the viewport with a new slot assignment.
+      //
+      // Teleport guard: if the backend re-placed the vehicle on a far edge
+      // (recovery path in reassignEdge / new A* after an invalid route), the
+      // delta from prev → current would be huge and the interp would draw a
+      // streak across the map ("flying car"). When the delta exceeds what a
+      // vehicle could plausibly cover between two WS frames, we snap by
+      // forcing prev = current.
       const prev = this.lastKnownPos.get(v.id);
-      this.prevPositions[i * 2]     = prev ? prev[0] : mercX;
-      this.prevPositions[i * 2 + 1] = prev ? prev[1] : mercY;
+      let prevX = mercX, prevY = mercY;
+      if (prev) {
+        const dx = mercX - prev[0];
+        const dy = mercY - prev[1];
+        // 0.0005 mercator ≈ 55 m at Paris latitude; a vehicle at 250 km/h
+        // covers ~14 m in 200 ms, so anything past this threshold is a
+        // backend re-spawn, not honest motion.
+        if (dx * dx + dy * dy < TELEPORT_SQ_THRESHOLD) {
+          prevX = prev[0];
+          prevY = prev[1];
+        }
+      }
+      this.prevPositions[i * 2]     = prevX;
+      this.prevPositions[i * 2 + 1] = prevY;
       this.nextPositions[i * 2]     = mercX;
       this.nextPositions[i * 2 + 1] = mercY;
       this.lastKnownPos.set(v.id, [mercX, mercY]);
@@ -166,10 +221,21 @@ export class VehicleRenderer {
   }
 
   // -------------------------------------------------------------------------
+  /**
+   * Linear blend factor from {@code prevPositions} (alpha 0) to
+   * {@code nextPositions} (alpha 1) based on time elapsed since the last
+   * frame arrived, measured on the same monotonic clock used by render().
+   *
+   * <p>Right after a WS frame: alpha ≈ 0 → we render at the *previous* target
+   * (smooth visual continuity with the frame just before). Over the next
+   * ~{@link #interpSpanMs} ms the alpha climbs to 1 and the vehicle slides
+   * into its new position. The render loop calls {@code triggerRepaint()}
+   * while alpha &lt; 1, so the slide actually animates instead of snapping.
+   */
   private computeAlpha(nowMs: number): number {
-    const span = this.nextTimestamp - this.prevTimestamp;
-    if (span <= 0) return 1;
-    return Math.min(1, Math.max(0, (nowMs - this.nextTimestamp) / span + 1));
+    if (this.lastFrameClientMs === 0 || this.interpSpanMs <= 0) return 1;
+    const elapsed = nowMs - this.lastFrameClientMs;
+    return Math.min(1, Math.max(0, elapsed / this.interpSpanMs));
   }
 
   private interpolatePositions(alpha: number): void {
@@ -250,10 +316,25 @@ export class VehicleRenderer {
    * 0 = detailed silhouettes, 1 = compact directional markers.
    * Selected vehicles stay detailed in the shader so inspection remains clear.
    */
+  /**
+   * Choisit entre :
+   *   0 = silhouettes type-aware détaillées (paintCar / paintBus / …)
+   *   1 = marqueur directionnel compact (paintLodMarker)
+   *
+   * Le shader détaillé fait ~8-10 SDF par pixel — magnifique pour 1 véhicule
+   * sélectionné ou une petite flotte au zoom rue, ruineux pour 15 K véhicules
+   * à zoom ville. Seuils calibrés pour garder >50 FPS sur Mac M1 :
+   *   - Toute flotte > 5 000  → toujours LOD (le shader détaillé est trop cher).
+   *   - Zoom < 14.5           → toujours LOD (les véhicules sont sub-pixel anyway).
+   *   - Zoom 14.5–15.5 + > 2 K → LOD.
+   *   - Sinon (zoom rue + petite flotte) → silhouettes détaillées.
+   * Les véhicules SÉLECTIONNÉS restent toujours en détail (cf. dispatch FS).
+   */
   private lodMode(): number {
     const zoom = this.map?.getZoom() ?? 14;
-    if (zoom < 12.6) return 1.0;
-    if (zoom < 14.2 && this.vehicleCount > 6500) return 1.0;
+    if (this.vehicleCount > 5000) return 1.0;
+    if (zoom < 14.5) return 1.0;
+    if (zoom < 15.5 && this.vehicleCount > 2000) return 1.0;
     return 0.0;
   }
 }

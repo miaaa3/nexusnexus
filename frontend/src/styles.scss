@@ -45,3 +45,54 @@ html, body {
 .maplibregl-ctrl-attrib a {
   color: rgba(255, 255, 255, 0.35) !important;
 }
+
+/* ─── Popup dark theme ─────────────────────────────────────────────────── */
+/* MapLibre's default popup is white with light text — unreadable on the
+   dark map. The .nexus-popup class is applied to every popup we open
+   (incident click, etc.) so we restyle it once here instead of per-call. */
+.nexus-popup .maplibregl-popup-content {
+  background: rgba(11, 20, 38, 0.96) !important;
+  color: rgba(230, 240, 255, 0.95) !important;
+  border: 1px solid rgba(61, 158, 255, 0.35);
+  border-radius: 10px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45),
+              0 0 0 1px rgba(61, 158, 255, 0.12);
+  backdrop-filter: blur(14px);
+  padding: 12px 14px;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.nexus-popup .maplibregl-popup-content b,
+.nexus-popup .maplibregl-popup-content strong {
+  color: #ffffff;
+  letter-spacing: 0.2px;
+}
+.nexus-popup .maplibregl-popup-content hr {
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  margin: 8px 0;
+}
+.nexus-popup .maplibregl-popup-content i,
+.nexus-popup .maplibregl-popup-content em {
+  color: rgba(255, 255, 255, 0.55);
+  font-style: italic;
+}
+/* The tail/arrow pointing at the clicked feature — match the popup body */
+.nexus-popup .maplibregl-popup-tip {
+  border-top-color: rgba(11, 20, 38, 0.96) !important;
+  border-bottom-color: rgba(11, 20, 38, 0.96) !important;
+}
+/* Close button — make it visible on the dark background */
+.nexus-popup .maplibregl-popup-close-button {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 18px;
+  padding: 2px 7px;
+  right: 4px;
+  top: 2px;
+  transition: color 0.15s ease;
+}
+.nexus-popup .maplibregl-popup-close-button:hover {
+  background: transparent;
+  color: #ff8a7c;
+}

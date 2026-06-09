@@ -21,15 +21,20 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 @Service
 public class FrameRecorder {
 
-    // 600 frames @ 10 Hz → 60 seconds of history
-    private static final int MAX_FRAMES = 600;
+    // Ring depth was 600. At 5 K vehicles that meant ~3 M VehicleUpdate
+    // references retained at all times (~240 MB), enough to trigger old-gen GC
+    // pauses every time we ramped the fleet and the recorder was forced to
+    // hold both pre- and post-resize snapshots until the ring rotated. 200
+    // frames still gives 20 s of replay at 10 Hz and ~33 s at the 5 Hz cadence
+    // used above 4 K vehicles — plenty for "scrub the last few seconds".
+    private static final int MAX_FRAMES = 200;
 
     private final SimulationFrame[] ring = new SimulationFrame[MAX_FRAMES];
     private int head = 0;          // next write position
     private int size = 0;          // number of valid entries
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    /** Record a new frame — called by VehicleBroadcaster after each tick. */
+    /** Record a new full frame — called by VehicleBroadcaster at its sampled cadence. */
     public void record(SimulationFrame frame) {
         lock.writeLock().lock();
         try {

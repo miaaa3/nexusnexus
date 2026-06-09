@@ -58,6 +58,50 @@ public class RoadGraph {
 
     public int nodeCount() { return nodes.size(); }
     public int edgeCount() { return edges.size(); }
+
+    /**
+     * Project {@code (lat, lon)} onto the closest road segment and return the
+     * snapped lat/lon. Used to "anchor" manually-placed incidents to a real
+     * road so the UI never shows an accident in the middle of a field. O(E)
+     * per call — at city scale (a few thousand edges) this comes out under
+     * a few ms, fine on a single REST request.
+     *
+     * <p>The math treats degrees as flat coords; that introduces a small
+     * skew at higher latitudes but is irrelevant for snap-to-edge at urban
+     * scale where the lon/lat ratio is roughly constant within the query.
+     */
+    public double[] snapToNearestEdge(double lat, double lon) {
+        double bestDistSq = Double.POSITIVE_INFINITY;
+        double[] best = null;
+        for (RoadEdge e : edges) {
+            double[] from = nodes.get(e.from());
+            double[] to   = nodes.get(e.to());
+            if (from == null || to == null) continue;
+            double[] proj = projectOnSegment(lat, lon, from[0], from[1], to[0], to[1]);
+            double dLat = lat - proj[0];
+            double dLon = lon - proj[1];
+            double distSq = dLat * dLat + dLon * dLon;
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                best = proj;
+            }
+        }
+        return best != null ? best : new double[]{lat, lon};
+    }
+
+    /** Closest point on the segment [A, B] to point P. Clamped at the endpoints. */
+    private static double[] projectOnSegment(double pLat, double pLon,
+                                             double aLat, double aLon,
+                                             double bLat, double bLon) {
+        double dLat = bLat - aLat;
+        double dLon = bLon - aLon;
+        double len2 = dLat * dLat + dLon * dLon;
+        if (len2 == 0.0) return new double[]{aLat, aLon};
+        double t = ((pLat - aLat) * dLat + (pLon - aLon) * dLon) / len2;
+        if (t < 0.0) t = 0.0;
+        else if (t > 1.0) t = 1.0;
+        return new double[]{aLat + t * dLat, aLon + t * dLon};
+    }
     public boolean isEmpty() { return edges.isEmpty(); }
     public Bounds bounds() { return bounds; }
 

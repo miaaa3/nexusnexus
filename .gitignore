@@ -74,6 +74,7 @@ out/
 
 # ── Generated documentation previews ─────────────────────────────────────────
 docs/render_*/
+outputs/
 
 # ── Local reports / presentation notes (not committed) ───────────────────────
 docs/

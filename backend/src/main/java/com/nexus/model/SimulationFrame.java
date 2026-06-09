@@ -11,7 +11,7 @@ import java.util.List;
  * the previous frame:
  * <ul>
  *   <li>{@code keyframe = true}  → {@code vehicles} is the full fleet, {@code removed} is empty.
- *       The frontend replaces its local state. Sent every ~2 s.</li>
+ *       The frontend replaces its local state. Sent roughly every two seconds.</li>
  *   <li>{@code keyframe = false} → {@code vehicles} contains only entries whose
  *       lat/lon/speed/direction/wrecked changed since the previous tick, and
  *       {@code removed} lists IDs that are no longer in the fleet.</li>

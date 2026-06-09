@@ -6,6 +6,7 @@ import com.nexus.model.RouteResponse;
 import com.nexus.model.ZoneStatus;
 import com.nexus.simulation.SimulationEngine;
 import com.nexus.simulation.TrafficMode;
+import com.nexus.websocket.VehicleBroadcaster;
 
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -25,7 +26,27 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class SimulationController {
 
-    private final SimulationEngine simulationEngine;
+    private final SimulationEngine     simulationEngine;
+    private final VehicleBroadcaster   broadcaster;
+
+    /**
+     * Bounding box of the currently-loaded road graph. Used by the frontend
+     * congestion grid to size its cells around the actual simulation area
+     * instead of relying on hard-coded coords (which only worked for the
+     * original Paris demo and silently broke the layer for every other city).
+     * Returns 204 if the graph is not yet loaded.
+     */
+    @GetMapping("/bounds")
+    public ResponseEntity<Map<String, Double>> getBounds() {
+        var b = simulationEngine.getGraphBounds();
+        if (b == null) return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(Map.of(
+                "minLat", b.minLat(),
+                "maxLat", b.maxLat(),
+                "minLon", b.minLon(),
+                "maxLon", b.maxLon()
+        ));
+    }
 
     @GetMapping("/status")
     public ResponseEntity<Map<String, Object>> getStatus() {
@@ -72,7 +93,27 @@ public class SimulationController {
             String  label
     ) {}
 
-    /** Drop a user-created incident at a clicked map location. */
+    /**
+     * Drop a user-created incident. The click target is interpreted as
+     * follows:
+     *
+     * <ol>
+     *   <li>If a vehicle sits within {@link #DROP_VEHICLE_RADIUS_KM} of the
+     *       click point, that vehicle is <b>wrecked</b> (frozen as a static
+     *       obstacle for the incident's duration) and the incident lands on
+     *       its current position. This is the realistic "manual accident"
+     *       UX — you click a roughly intended area and the nearest car
+     *       becomes the casualty.</li>
+     *   <li>Otherwise the click coords are snapped to the nearest road
+     *       edge so the incident at least lands on a real street rather
+     *       than in the middle of a field or river.</li>
+     * </ol>
+     *
+     * The returned {@link IncidentUpdate} has the final on-map coords so
+     * the frontend can fly the camera there with no further round-trip.
+     */
+    private static final double DROP_VEHICLE_RADIUS_KM = 0.6;
+
     @PostMapping("/incidents")
     public ResponseEntity<IncidentUpdate> createIncident(@RequestBody CreateIncidentRequest req) {
         long now = System.currentTimeMillis();
@@ -82,9 +123,30 @@ public class SimulationController {
         String label    = (req.label() != null && !req.label().isBlank())
                 ? req.label() : (type + " (manuel)");
 
+        double finalLat, finalLon;
+        var hit = simulationEngine.nearestVehicle(req.lat(), req.lon(), DROP_VEHICLE_RADIUS_KM);
+        if (hit != null && "accident".equals(type)) {
+            // Wreck the targeted vehicle for the incident's duration —
+            // turns the manual drop into a real on-map accident with the
+            // affected car visible as an épave silhouette.
+            simulationEngine.wreckVehicle(hit.getId(), duration);
+            finalLat = hit.getLatitude();
+            finalLon = hit.getLongitude();
+            if (req.label() == null || req.label().isBlank()) {
+                label = "accident : " + hit.getId();
+            }
+        } else {
+            // No vehicle in range, or the user picked a non-accident type
+            // (closure / congestion / construction) — snap to the road grid
+            // so the marker at least sticks to a real street.
+            double[] snapped = simulationEngine.snapToNearestRoad(req.lat(), req.lon());
+            finalLat = snapped[0];
+            finalLon = snapped[1];
+        }
+
         IncidentUpdate inc = new IncidentUpdate(
                 "man-" + UUID.randomUUID().toString().substring(0, 8),
-                type, severity, req.lat(), req.lon(), label, now + duration
+                type, severity, finalLat, finalLon, label, now + duration
         );
         simulationEngine.addManualIncident(inc);
         return ResponseEntity.ok(inc);
@@ -142,6 +204,11 @@ public class SimulationController {
     @PostMapping("/vehicles")
     public ResponseEntity<Void> setVehicleCount(@RequestParam int count) {
         simulationEngine.setVehicleCount(count);
+        // Push a keyframe right now instead of waiting for the next scheduled
+        // tick — the client sees the new fleet size within ~50 ms of slider
+        // release, rather than up to a full broadcast interval (200 ms at 5 K,
+        // 500 ms at 12 K+) of additional latency on top of the spawn cost.
+        broadcaster.pushImmediateKeyframe();
         return ResponseEntity.ok().build();
     }
 

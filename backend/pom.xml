@@ -19,6 +19,10 @@
 
     <properties>
         <java.version>21</java.version>
+        <!-- Override la version managée par Spring Boot 3.2.5 (1.18.30) qui
+             ne supporte pas Java 21 → crash "TypeTag :: UNKNOWN" au compile.
+             1.18.34+ est compatible Java 21. -->
+        <lombok.version>1.18.36</lombok.version>
     </properties>
 
     <dependencies>
@@ -65,6 +69,26 @@
 
     <build>
         <plugins>
+            <!-- Compiler : active explicitement Lombok comme annotation processor.
+                 Sans ce bloc, `mvn compile` ignore @Data/@Slf4j/@RequiredArgsConstructor
+                 (les getters/setters et le `log` ne sont pas générés). IntelliJ marche
+                 quand même car son plugin Lombok fait l'AP côté IDE. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>1.18.36</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

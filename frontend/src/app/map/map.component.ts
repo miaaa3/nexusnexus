@@ -3,6 +3,7 @@ import {
   ElementRef, inject, signal, effect, HostListener
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { HttpClient } from '@angular/common/http';
 import { Map as MapLibreMap, NavigationControl, MapMouseEvent } from 'maplibre-gl';
 import { Subscription } from 'rxjs';
 
@@ -89,6 +90,23 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private lastVisibleVehicles: VehicleUpdate[] = [];
   private allFilteredVehicles: VehicleUpdate[] = [];
 
+  /**
+   * The most recent WS frame received while the WebGL renderers were not yet
+   * initialised (basemap still loading). Replayed by {@link initLayers} so the
+   * fleet appears the instant the renderer becomes ready — instead of waiting
+   * for the next backend broadcast tick, which could be up to ~200 ms later.
+   */
+  private pendingFrame: { vehicles: VehicleUpdate[]; vehicleCount: number; timestamp: number } | null = null;
+
+  /**
+   * Backend-reported road graph bounds. Drives {@link CongestionRenderer}'s
+   * grid placement. Fetched once in ngAfterViewInit; refreshed after an OSM
+   * re-import via the map-import flow.
+   */
+  private graphBounds?: { minLat: number; maxLat: number; minLon: number; maxLon: number };
+
+  private http = inject(HttpClient);
+
   // Shared via MapStateService — DashboardComponent reads these
   private readonly stats      = this.mapState.stats;
   private readonly searchPool = this.mapState.searchPool;
@@ -159,8 +177,41 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   ngAfterViewInit(): void {
+    // Connect the WebSocket BEFORE the map finishes loading — the basemap can
+    // take 0.5–2 s to fetch its first tiles, and that delay used to push the
+    // first WS frame back by the same amount (the map only added the WS
+    // listener after 'load' fired). Connecting in parallel means the backend
+    // keyframe is already in flight by the time the renderer is ready.
+    this.connectWebSocket();
+    this.connectReplay();
+    this.fetchGraphBounds();
+
     this.initMap();
     this.subscribePanTo();
+  }
+
+  /**
+   * Pull the road graph bounds from the backend so the congestion grid
+   * sizes its cells around the actual simulated area. Re-creates the
+   * congestion renderer when the response arrives if initLayers has
+   * already run with stale (Paris fallback) bounds.
+   */
+  private fetchGraphBounds(): void {
+    this.http.get<{ minLat: number; maxLat: number; minLon: number; maxLon: number }>(
+      `${environment.backendUrl}/api/simulation/bounds`
+    ).subscribe({
+      next: b => {
+        this.graphBounds = b;
+        if (this.congestionRenderer && this.map?.loaded()) {
+          // Renderer was already built with Paris fallback — swap it out so
+          // the cells actually overlay the simulated city.
+          try { this.map.removeLayer(this.congestionRenderer.id); } catch { /* not added yet */ }
+          this.congestionRenderer = new CongestionRenderer(this.graphBounds);
+          this.map.addLayer(this.congestionRenderer as any, this.trailRenderer?.id);
+        }
+      },
+      error: () => { /* keep Paris fallback — at least the layer renders somewhere */ }
+    });
   }
 
   ngOnDestroy(): void {
@@ -227,7 +278,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    */
   private initLayers(): void {
     // Re-create renderers (necessary after style switch — GL context is valid, VAOs reset)
-    this.congestionRenderer = new CongestionRenderer();
+    // Congestion grid: pass the backend's real graph bounds so the cells sit on
+    // the actual simulated city. The fetch is fire-and-forget — if it lands
+    // before initLayers (cached on style switch), great; otherwise we recreate
+    // the renderer once it returns. Without this the layer renders silently
+    // off-map for any city other than the original Paris demo.
+    this.congestionRenderer = new CongestionRenderer(this.graphBounds);
     this.trailRenderer      = new TrailRenderer();
     this.vehicleRenderer    = new VehicleRenderer();
 
@@ -250,14 +306,24 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (f.irisEnabled)      this.irisLayer.show();
     if (f.mode3dEnabled)    this.add3dBuildingsIfSupported();
 
-    // Start feeds only on first load (check if already subscribed)
-    if (!this.liveSub) {
-      this.connectWebSocket();
-      this.connectReplay();
+    // Start feeds only on first load (check if already subscribed).
+    // WS + replay are now connected eagerly in ngAfterViewInit so they race
+    // the basemap load; the timer-based feeds still kick off here because
+    // they reference the renderers we just built above.
+    if (!this.chartTimer) {
       this.startFpsLoop();
       this.startCongestionTimer();
       this.startChartTimer();
       this.watchWsStatus();
+    }
+
+    // Replay any frame that arrived before the WebGL renderers existed.
+    // Without this, the map would stay blank until the next backend tick
+    // (~100–200 ms later) even though we already have the data in hand.
+    if (this.pendingFrame) {
+      const p = this.pendingFrame;
+      this.pendingFrame = null;
+      this.processFrame(p.vehicles, p.vehicleCount, p.timestamp);
     }
   }
 
@@ -355,6 +421,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   private processFrame(vehicles: VehicleUpdate[], vehicleCount: number, timestamp: number): void {
+    // Renderers might not exist yet — WS is connected eagerly in
+    // ngAfterViewInit, but the WebGL layers are only added after MapLibre's
+    // 'load' event fires. Stash the freshest frame and let initLayers replay
+    // it as soon as everything is wired up.
+    if (!this.vehicleRenderer) {
+      this.pendingFrame = { vehicles, vehicleCount, timestamp };
+      return;
+    }
+
     const t0      = performance.now();
     const filters = this.selection.filters();
 
@@ -404,7 +479,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       const enabled = this.selection.filters().congestionEnabled;
       if (!enabled) return;
       if (this.allFilteredVehicles.length > 0) {
-        this.congestionRenderer.updateVehicles(this.allFilteredVehicles);
+        // Capture the avg/max returned by the renderer so the dashboard
+        // chart's "Congestion 0% PEAK" widget actually reflects live data
+        // instead of staying at zero forever.
+        const stats = this.congestionRenderer.updateVehicles(this.allFilteredVehicles);
+        this.avgCongScore = stats.avg;
+        this.maxCongScore = stats.max;
       }
     }, 500);
   }

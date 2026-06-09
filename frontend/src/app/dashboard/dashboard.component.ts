@@ -464,9 +464,20 @@ export class DashboardComponent implements OnInit, OnDestroy {
   readonly selectedVehicle = this.sel.selectedVehicle;
   readonly filters         = this.sel.filters;
 
-  vehicleCount    = 500;
+  // Defaults match application.yml so the slider doesn't visibly jump on
+  // first boot; a reactive effect (in the constructor) overwrites them with
+  // the live values as soon as the first WS frame arrives — typically within
+  // 100–300 ms of connection, well before any HTTP /status response.
+  vehicleCount    = 2000;
   speedMultiplier = 1.0;
   paused          = false;
+  /**
+   * Set to true the first time the user moves the vehicle-count slider, so
+   * the WS-driven sync effect stops fighting them. Without this flag, the
+   * slider would jitter back to the live count every time a WS frame arrives,
+   * which would make adjusting the slider feel broken.
+   */
+  private vehicleCountUserTouched = false;
   readonly speeds = [0.25, 0.5, 1, 2, 4, 8];
 
   // Traffic mode display
@@ -504,6 +515,17 @@ export class DashboardComponent implements OnInit, OnDestroy {
     effect(() => {
       const pool = this.mapState.searchPool();
       this.searchComp?.setPool(pool);
+    });
+
+    // Sync the vehicle-count slider from the live WS-driven stats signal so
+    // the slider value matches what the HUD reports as soon as the first
+    // frame arrives. Stops syncing once the user has touched the slider, so
+    // their setpoint isn't overwritten by the next broadcast tick.
+    effect(() => {
+      const live = this.stats().vehicleCount;
+      if (!this.vehicleCountUserTouched && live > 0 && live !== this.vehicleCount) {
+        this.vehicleCount = live;
+      }
     });
 
     // R key → cycle traffic mode
@@ -580,6 +602,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   applyVehicleCount(): void {
+    // From now on, the WS-sync effect stops touching the slider — the user is
+    // driving it. Without this flag, every incoming frame would yank the
+    // slider back to the previous count while the backend ramps up.
+    this.vehicleCountUserTouched = true;
     this.http.post(`${environment.backendUrl}/api/simulation/vehicles`, null,
       { params: { count: this.vehicleCount } }).subscribe();
   }

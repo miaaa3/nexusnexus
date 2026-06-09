@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Map as MapLibreMap } from 'maplibre-gl';
+import { Map as MapLibreMap, Popup } from 'maplibre-gl';
 
 import { environment } from '../../environments/environment';
 
@@ -104,7 +104,7 @@ export class IncidentLayerService implements OnDestroy {
         if (!f) return;
         const { label, type, expiresAtMs } = f.properties;
         const remainingS = Math.max(0, Math.round((expiresAtMs - Date.now()) / 1000));
-        new (window as any).maplibregl.Popup({ closeButton: false, className: 'nexus-popup' })
+        new Popup({ closeButton: false, className: 'nexus-popup' })
           .setLngLat(e.lngLat)
           .setHTML(`<b>${String(type).toUpperCase()}</b><br>${label}<br><i>clears in ${remainingS}s</i>`)
           .addTo(map);

@@ -1,8 +1,9 @@
 import {
-  Component, OnInit, OnDestroy, EventEmitter, Output, inject, signal,
+  Component, OnInit, OnDestroy, EventEmitter, Output, inject, signal, effect,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 
 import { environment } from '../../environments/environment';
 import { IrisLayerService } from '../map/iris-layer.service';
@@ -38,6 +39,51 @@ export interface IrisFlyToEvent {
   imports: [CommonModule],
   template: `
     <div class="iris-card">
+      @if (selected(); as z) {
+        <!-- ── Selected zone detail (sidebar replacement for the old popup) ── -->
+        <div class="iris-detail">
+          <div class="iris-detail-head">
+            <div>
+              <div class="iris-detail-name">{{ z.nomIris }}</div>
+              <div class="iris-detail-sub">
+                {{ z.nomCom }} · {{ z.codeIris }} · {{ typeLabel(z.typIris) }}
+              </div>
+            </div>
+            <button class="iris-close" (click)="clearSelection()" title="Fermer">×</button>
+          </div>
+
+          <div class="iris-detail-grid">
+            <div><span class="d-val">{{ z.vehicleCount | number }}</span><span class="d-lbl">véhicules</span></div>
+            <div><span class="d-val" [style.color]="z.incidentCount > 0 ? '#ff8c66' : ''">{{ z.incidentCount }}</span><span class="d-lbl">incidents</span></div>
+            <div><span class="d-val">{{ z.avgSpeedKmh | number:'1.0-1' }}</span><span class="d-lbl">km/h moy</span></div>
+            <div><span class="d-val">{{ z.density | number:'1.0-1' }}</span><span class="d-lbl">véh/km²</span></div>
+          </div>
+
+          <div class="iris-detail-row">
+            <span>Congestion</span>
+            <span [style.color]="colorFor(z.congestionScore)" style="font-weight:600">
+              {{ congestionLabel(z.congestionScore) }}
+              ({{ (z.congestionScore * 100) | number:'1.0-0' }}%)
+            </span>
+          </div>
+          <div class="iris-bar">
+            <div class="iris-bar-fill"
+                 [style.width.%]="z.congestionScore * 100"
+                 [style.background]="colorFor(z.congestionScore)"></div>
+          </div>
+
+          <div class="iris-detail-spark-label">HISTORIQUE 1 H</div>
+          <div class="iris-detail-spark">
+            @if (sparklineSvg()) {
+              <div [innerHTML]="sparklineSvg()"></div>
+            } @else {
+              <span class="iris-empty" style="padding:0">{{ sparklineMsg() }}</span>
+            }
+          </div>
+        </div>
+        <div class="iris-detail-sep"></div>
+      }
+
       <div class="iris-header">
         <span class="iris-title">ANALYSE TERRITORIALE</span>
         <span class="iris-sub">Top {{ rows().length || 5 }} · congestion</span>
@@ -209,6 +255,83 @@ export interface IrisFlyToEvent {
       font-weight: 600;
       font-variant-numeric: tabular-nums;
     }
+
+    /* ── Selected-zone detail card ───────────────────────────────────────── */
+    .iris-detail {
+      display: flex; flex-direction: column; gap: 7px;
+      padding: 9px 10px;
+      background: linear-gradient(180deg, rgba(61,158,255,.08), rgba(61,158,255,.02));
+      border: 1px solid rgba(61,158,255,.3);
+      border-radius: 8px;
+    }
+    .iris-detail-sep {
+      height: 1px; background: rgba(255,255,255,.07); margin: 4px 0 2px;
+    }
+    .iris-detail-head {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      gap: 8px;
+    }
+    .iris-detail-name {
+      font-size: 13px; font-weight: 700;
+      color: rgba(255,255,255,.95);
+      overflow: hidden; text-overflow: ellipsis;
+    }
+    .iris-detail-sub {
+      font-size: 10px;
+      color: rgba(255,255,255,.5);
+      margin-top: 2px;
+    }
+    .iris-close {
+      flex: 0 0 22px; width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 50%;
+      color: rgba(255,255,255,.65);
+      cursor: pointer;
+      font-size: 15px; line-height: 1;
+      transition: all .15s ease;
+    }
+    .iris-close:hover {
+      background: rgba(231,76,60,.18);
+      border-color: rgba(231,76,60,.5);
+      color: #ff8a7c;
+    }
+    .iris-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 4px;
+      margin-top: 2px;
+    }
+    .iris-detail-grid > div {
+      display: flex; align-items: baseline; gap: 5px;
+      padding: 4px 6px;
+      background: rgba(255,255,255,.03);
+      border-radius: 5px;
+    }
+    .d-val {
+      font-size: 14px; font-weight: 700;
+      color: rgba(255,255,255,.92);
+      font-variant-numeric: tabular-nums;
+    }
+    .d-lbl {
+      font-size: 10px;
+      color: rgba(255,255,255,.5);
+    }
+    .iris-detail-row {
+      display: flex; justify-content: space-between;
+      font-size: 11px;
+      color: rgba(255,255,255,.75);
+      margin-top: 2px;
+    }
+    .iris-detail-spark-label {
+      font-size: 9px; letter-spacing: 1.2px;
+      color: rgba(255,255,255,.5);
+      margin-top: 4px;
+    }
+    .iris-detail-spark {
+      min-height: 42px;
+    }
   `],
 })
 export class IrisAnalyticsComponent implements OnInit, OnDestroy {
@@ -218,8 +341,9 @@ export class IrisAnalyticsComponent implements OnInit, OnDestroy {
   /** Top-K to request from the backend. */
   private static readonly LIMIT   = 5;
 
-  private http = inject(HttpClient);
-  private iris = inject(IrisLayerService);
+  private http      = inject(HttpClient);
+  private iris      = inject(IrisLayerService);
+  private sanitizer = inject(DomSanitizer);
 
   readonly rows    = signal<IrisCongestionRow[]>([]);
   readonly loading = signal<boolean>(true);
@@ -229,9 +353,45 @@ export class IrisAnalyticsComponent implements OnInit, OnDestroy {
     loaded: boolean; zoneCount: number; active: number; trouble: number; heavy: number;
   }>({ loaded: false, zoneCount: 0, active: 0, trouble: 0, heavy: 0 });
 
+  /** Zone IRIS actuellement sélectionnée (signal du service map). */
+  readonly selected = this.iris.selectedZone;
+
+  /** Sparkline SVG (sanitisée) chargée à la sélection. */
+  readonly sparklineSvg = signal<SafeHtml | null>(null);
+  /** Message d'état quand pas de sparkline (chargement / vide / erreur). */
+  readonly sparklineMsg = signal<string>('Chargement…');
+
   @Output() flyTo = new EventEmitter<IrisFlyToEvent>();
 
   private pollTimer?: ReturnType<typeof setInterval>;
+
+  constructor() {
+    // Auto-fetch the 1 h congestion history whenever the selected zone
+    // changes — including when the user closes (selected = null) so we
+    // wipe the previous sparkline instead of leaving stale data on screen.
+    effect(() => {
+      const z = this.selected();
+      this.sparklineSvg.set(null);
+      if (!z) return;
+      this.sparklineMsg.set('Chargement…');
+      this.iris.fetchHistory(z.codeIris).subscribe({
+        next: data => {
+          // The user might have already closed or selected another zone
+          // before our HTTP came back — drop the result in that case.
+          if (this.selected()?.codeIris !== z.codeIris) return;
+          const pts = data?.points ?? [];
+          if (pts.length === 0) {
+            this.sparklineMsg.set("Données insuffisantes (vient juste d'être chargé).");
+            return;
+          }
+          this.sparklineSvg.set(
+            this.sanitizer.bypassSecurityTrustHtml(this.iris.buildSparklineSVG(pts)),
+          );
+        },
+        error: () => this.sparklineMsg.set('Historique indisponible.'),
+      });
+    });
+  }
 
   ngOnInit(): void {
     this.refresh();
@@ -250,6 +410,23 @@ export class IrisAnalyticsComponent implements OnInit, OnDestroy {
     const c = this.iris.getCentroidFor(r.codeIris);
     if (!c) return;   // IRIS layer not loaded yet — silently no-op
     this.flyTo.emit({ ...c, codeIris: r.codeIris });
+  }
+
+  clearSelection(): void {
+    this.iris.clearSelection();
+  }
+
+  /** Map H/A/D/Z → user-friendly French label. */
+  typeLabel(t: string): string {
+    return ({ H: 'Habitat', A: 'Activité', D: 'Divers', Z: 'Zone spéciale' } as Record<string, string>)[t] ?? t;
+  }
+
+  /** Congestion bucket label aligned with the color ramp. */
+  congestionLabel(score: number): string {
+    if (score < 0.25) return 'fluide';
+    if (score < 0.50) return 'modéré';
+    if (score < 0.75) return 'dense';
+    return 'engorgé';
   }
 
   /** Green → yellow → orange → red congestion ramp (matches the choropleth). */

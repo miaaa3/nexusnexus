@@ -63,6 +63,24 @@ public class SimulationEngine {
     private final CopyOnWriteArrayList<Vehicle> vehicles = new CopyOnWriteArrayList<>();
     private final ReadWriteLock simulationLock = new ReentrantReadWriteLock();
 
+    /**
+     * Vehicles waiting to be merged into the live fleet, drained at
+     * {@link #SPAWN_BATCH_PER_TICK} per tick. Set on every batch spawn
+     * (slider 500 → 18 000), populated by {@link #setVehicleCount}, drained
+     * at the very top of {@link #tick}. Using a concurrent deque avoids the
+     * need to fight for the write lock from the REST controller thread.
+     *
+     * <p><b>Why staggered.</b> Dropping 17 K vehicles into the simulation in
+     * a single tick caused them to converge on the same edges at the same
+     * times and stall en masse — even with smart placement, hot-edge avoidance
+     * could not unwind the simultaneous demand spike. Slow add empirically
+     * works; this queue is just the engine doing slow add for the user.
+     */
+    private final java.util.concurrent.ConcurrentLinkedDeque<Vehicle> pendingSpawn =
+            new java.util.concurrent.ConcurrentLinkedDeque<>();
+    /** Max vehicles drained from {@link #pendingSpawn} per tick. */
+    private static final int SPAWN_BATCH_PER_TICK = 500;
+
     /** Null when Overpass fetch fails — road-only simulation stays empty. */
     private RoadGraph graph;
 
@@ -105,8 +123,15 @@ public class SimulationEngine {
      * Per-tick cap on the number of A* searches we'll run for lazy path
      * reassignment. Keeps a 15K-vehicle scale-up from spiking the tick when
      * many vehicles finish their initial edge in the same frame.
+     *
+     * <p>Bumped from 400 → 800 after empirically watching a 500 → 18 000
+     * slider jump freeze the fleet for several seconds: vehicles all finished
+     * their initial edge within a 3-second window and queued for paths while
+     * the cars behind them stacked up via car-following. 800/tick × 10 Hz =
+     * 8 000 A* per second covers an 18 K spawn in about 2 s instead of 4-5.
+     * The cache absorbs most of the work so the actual CPU bump is modest.
      */
-    private static final int MAX_PATHS_PER_TICK = 400;
+    private static final int MAX_PATHS_PER_TICK = 800;
     private int pathBudgetThisTick = 0;
 
     // ── A* route cache + hot-edge avoidance ──────────────────────────────────
@@ -209,6 +234,11 @@ public class SimulationEngine {
     // ─── Tick ─────────────────────────────────────────────────────────────────
 
     public void tick(long deltaMs) {
+        // Drain pending spawns BEFORE taking the read lock — addAll on
+        // CopyOnWriteArrayList takes its own internal lock and we don't want
+        // to escalate to the write lock from inside the read-locked tick.
+        drainPendingSpawn();
+
         simulationLock.readLock().lock();
         try {
             if (paused) return;   // positions frozen; broadcaster still sends unchanged state
@@ -517,6 +547,75 @@ public class SimulationEngine {
         try { return vehicles.size(); }
         finally { simulationLock.readLock().unlock(); }
     }
+
+    /**
+     * Bounding box of the currently-loaded road graph, or {@code null} if it
+     * has not been loaded yet (graph load happens on a background thread at
+     * boot). Used by the frontend congestion grid to size its cells around
+     * the real simulation area instead of relying on hard-coded coords.
+     */
+    public RoadGraph.Bounds getGraphBounds() {
+        simulationLock.readLock().lock();
+        try { return graph != null ? graph.bounds() : null; }
+        finally { simulationLock.readLock().unlock(); }
+    }
+
+    /**
+     * Snap a raw click point to the nearest road segment. Used by the
+     * "drop incident" feature so user-created incidents always anchor to a
+     * real road. Falls back to the input coords if the graph is not yet
+     * loaded.
+     */
+    public double[] snapToNearestRoad(double lat, double lon) {
+        simulationLock.readLock().lock();
+        try {
+            return graph != null ? graph.snapToNearestEdge(lat, lon)
+                                 : new double[]{lat, lon};
+        } finally { simulationLock.readLock().unlock(); }
+    }
+
+    /**
+     * Find the closest vehicle to {@code (lat, lon)} within {@code maxKm}.
+     * Returns {@code null} when no vehicle sits in range — the caller can
+     * then fall back to a road-snap, or refuse the request. Used by the
+     * "drop incident" flow so a manual accident always targets an actual
+     * vehicle the user can see on the map.
+     */
+    public Vehicle nearestVehicle(double lat, double lon, double maxKm) {
+        Vehicle best = null;
+        double bestKm = maxKm;
+        for (Vehicle v : vehicles) {
+            // Cheap rough filter on lat/lon delta before haversine, so the
+            // hot path stays linear and lock-free at 18 K vehicles.
+            double dLat = lat - v.getLatitude();
+            double dLon = lon - v.getLongitude();
+            if (Math.abs(dLat) > 0.05 || Math.abs(dLon) > 0.05) continue;
+            double km = haversineKm(lat, lon, v.getLatitude(), v.getLongitude());
+            if (km < bestKm) {
+                bestKm = km;
+                best   = v;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Mark a vehicle as wrecked for {@code durationMs} from now. The vehicle
+     * freezes in place and becomes a car-following obstacle until the
+     * timestamp elapses. Returns false if the id is unknown so the caller
+     * can react (e.g. the vehicle was already removed via a count change).
+     */
+    public boolean wreckVehicle(String id, long durationMs) {
+        long until = System.currentTimeMillis() + Math.max(5_000L, durationMs);
+        for (Vehicle v : vehicles) {
+            if (v.getId().equals(id)) {
+                v.setWreckedUntilMs(until);
+                v.setSpeed(0.0);
+                return true;
+            }
+        }
+        return false;
+    }
     public double      getSpeedMultiplier()         { return speedMultiplier; }
     public void        setSpeedMultiplier(double m) { speedMultiplier = Math.max(0, Math.min(10, m)); }
     public TrafficMode getTrafficMode()             { return trafficTime.getMode(); }
@@ -677,8 +776,40 @@ public class SimulationEngine {
      */
     private List<IrisZoneSystem.IrisZone> loadIrisZones(RoadGraph.Bounds b) {
         var local = irisLoader.loadFromFile(Path.of(config.getIrisLocalFile()));
-        if (!local.isEmpty()) return local;
+        // Before trusting the local file, check that its polygons actually
+        // sit anywhere near the loaded road graph. The repo ships with a
+        // Paris IRIS GeoJSON that silently produced an empty visual when the
+        // map switched to La Rochelle — zones rendered hundreds of km off-
+        // screen. If less than 5% of the local zones intersect the graph
+        // bounds, treat the file as "wrong city" and fall back to the WFS
+        // which we can ask for the actual region.
+        if (!local.isEmpty() && intersectsBounds(local, b) > 0.05) {
+            log.info("Using local IRIS file ({} zones) for bounds {}", local.size(), b);
+            return local;
+        }
+        if (!local.isEmpty()) {
+            log.info("Local IRIS file does not overlap the road graph bounds — " +
+                     "falling back to IGN WFS for the active city.");
+        }
         return irisLoader.loadForBounds(b.minLat(), b.minLon(), b.maxLat(), b.maxLon());
+    }
+
+    /**
+     * Fraction of {@code zones} whose bounding box overlaps the graph
+     * bounds. Cheap rectangle-rectangle test — IrisZone caches its bbox at
+     * construction so no per-call polygon sweep.
+     */
+    private static double intersectsBounds(List<IrisZoneSystem.IrisZone> zones,
+                                           RoadGraph.Bounds b) {
+        if (zones.isEmpty()) return 0.0;
+        int hits = 0;
+        for (var z : zones) {
+            // Two AABBs overlap iff neither is fully to the side of the other.
+            boolean apart = z.maxLon < b.minLon() || z.minLon > b.maxLon()
+                         || z.maxLat < b.minLat() || z.minLat > b.maxLat();
+            if (!apart) hits++;
+        }
+        return hits / (double) zones.size();
     }
 
     /**
@@ -698,47 +829,89 @@ public class SimulationEngine {
         return zones.size();
     }
 
+    /**
+     * Move up to {@link #SPAWN_BATCH_PER_TICK} vehicles from
+     * {@link #pendingSpawn} into the live fleet. Called at the top of every
+     * tick — at 10 Hz this digests ~5 000 vehicles per second, so a slider
+     * jump 500 → 18 000 fully resolves in about 3.5 s of steady ramp instead
+     * of one catastrophic dump.
+     */
+    private void drainPendingSpawn() {
+        if (pendingSpawn.isEmpty()) return;
+        int batch = 0;
+        List<Vehicle> chunk = new ArrayList<>(SPAWN_BATCH_PER_TICK);
+        Vehicle v;
+        while (batch < SPAWN_BATCH_PER_TICK && (v = pendingSpawn.pollFirst()) != null) {
+            chunk.add(v);
+            batch++;
+        }
+        if (chunk.isEmpty()) return;
+        simulationLock.writeLock().lock();
+        try {
+            vehicles.addAll(chunk);
+        } finally {
+            simulationLock.writeLock().unlock();
+        }
+        log.info("[drainSpawn] added {} → live={}, remaining queue={}",
+                chunk.size(), vehicles.size(), pendingSpawn.size());
+    }
+
     public void setVehicleCount(int count) {
         final int target = Math.min(count, config.getMaxVehicles());
 
-        // Snapshot current size + graph under the read lock — cheap, non-blocking.
+        // Snapshot current size + graph + existing fleet under the read lock.
+        // {@code current} includes already-queued spawns so a quick double-slide
+        // does not double-count.
         int current;
         RoadGraph g;
+        List<Vehicle> snapshot;
         simulationLock.readLock().lock();
         try {
             if (graph == null) {
                 log.warn("Ignoring vehicle count change because road graph is unavailable");
                 return;
             }
-            current = vehicles.size();
+            current = vehicles.size() + pendingSpawn.size();
             g       = graph;
+            snapshot = new ArrayList<>(vehicles);
+            // Include already-pending spawns in the density check so newcomers
+            // don't land on top of vehicles that will be added in a moment.
+            snapshot.addAll(pendingSpawn);
         } finally {
             simulationLock.readLock().unlock();
         }
         if (target == current) return;
 
         if (target > current) {
-            // Heavy work (placing on edges, seeding short paths) runs OUTSIDE the
-            // lock. A* is intentionally NOT called here — advanceOnRoad assigns
-            // each vehicle a full route on its first finished edge, spreading
-            // the cost across many ticks. The tick loop never freezes.
-            List<Vehicle> newVehicles = generator.generate(target - current, g);
-            simulationLock.writeLock().lock();
-            try {
-                vehicles.addAll(newVehicles);
-            } finally {
-                simulationLock.writeLock().unlock();
-            }
+            // Generate ALL newcomers up front (outside the lock, cheap with the
+            // density-aware placement) then drop them into the staggered queue.
+            // The tick loop will drain {@link #SPAWN_BATCH_PER_TICK} per pass,
+            // so the simulation never sees a one-shot 17 K-vehicle scale-up —
+            // it sees the same shape as an actual slow add, which we already
+            // know the car-following / A* logic handles gracefully.
+            List<Vehicle> newVehicles = generator.generate(target - current, g, snapshot);
+            pendingSpawn.addAll(newVehicles);
         } else {
-            simulationLock.writeLock().lock();
-            try {
-                int cur = vehicles.size();
-                if (target < cur) vehicles.subList(target, cur).clear();
-            } finally {
-                simulationLock.writeLock().unlock();
+            // Shrink: first cancel pending spawns, then trim the live fleet
+            // for whatever excess is left. Counting from the queue's tail is
+            // O(excess) on a deque, cheap even at 17 K pending.
+            int excess = current - target;
+            while (excess > 0 && pendingSpawn.pollLast() != null) {
+                excess--;
+            }
+            if (excess > 0) {
+                simulationLock.writeLock().lock();
+                try {
+                    int cur = vehicles.size();
+                    int newSize = Math.max(0, cur - excess);
+                    if (newSize < cur) vehicles.subList(newSize, cur).clear();
+                } finally {
+                    simulationLock.writeLock().unlock();
+                }
             }
         }
-        log.debug("Vehicle count: {} → {}", current, target);
+        log.info("[setVehicleCount] {} → {}  (live={}, queue={})",
+                current, target, vehicles.size(), pendingSpawn.size());
     }
 
     public void replaceGraph(RoadGraph newGraph, String mapName) {

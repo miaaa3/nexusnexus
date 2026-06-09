@@ -1,7 +1,25 @@
-import { Injectable, OnDestroy, inject } from '@angular/core';
+import { Injectable, OnDestroy, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Map as MapLibreMap } from 'maplibre-gl';
 import { environment } from '../../environments/environment';
+
+/**
+ * Wire shape of an IRIS zone selected on the map. Mirrors the GeoJSON
+ * feature properties of the {@code nexus-iris-fill} layer and is consumed
+ * by {@link app-iris-analytics}'s sidebar detail card.
+ */
+export interface IrisSelection {
+  codeIris:        string;
+  nomIris:         string;
+  typIris:         string;
+  nomCom:          string;
+  inseeComm:       string;
+  vehicleCount:    number;
+  density:         number;
+  avgSpeedKmh:     number;
+  incidentCount:   number;
+  congestionScore: number;
+}
 
 /**
  * IRIS INSEE zoning overlay.
@@ -40,6 +58,21 @@ export class IrisLayerService implements OnDestroy {
   private visible = false;
   private ready   = false;
   private selectedCodeIris: string | null = null;
+
+  /**
+   * Currently-selected zone, or null if none. Updated by the click handler
+   * on the IRIS fill layer; consumed by the dashboard's
+   * {@code IrisAnalyticsComponent} to render a sidebar detail card instead
+   * of the older MapLibre popup (which broke the visual layout and could
+   * not be referenced by other dashboard widgets).
+   */
+  readonly selectedZone = signal<IrisSelection | null>(null);
+
+  /** Clear both the map highlight and the sidebar detail card. */
+  clearSelection(): void {
+    this.selectedZone.set(null);
+    this.selectZone(null);
+  }
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -156,64 +189,28 @@ export class IrisLayerService implements OnDestroy {
         layout: { visibility: 'none' },
       });
 
-      // Popup on click — control-tower style analytics card.
+      // Click on a zone — push its properties into the {@link selectedZone}
+      // signal so the dashboard's IrisAnalyticsComponent can render a
+      // sidebar detail card. (Older code opened a MapLibre popup; we moved
+      // the UI into the sidebar so it doesn't cover the map and so other
+      // dashboard widgets can react to the selection too.)
       map.on('click', this.FILL_ID, (e: any) => {
         const f = e.features?.[0];
         if (!f) return;
-        const {
-          nomIris, codeIris, typIris, nomCom, inseeComm,
-          vehicleCount, density, avgSpeedKmh, incidentCount, congestionScore,
-        } = f.properties;
-        this.selectZone(codeIris ?? null);
-        const typeLabel: Record<string, string> = {
-          H: 'Habitat', A: 'Activité', D: 'Divers', Z: 'Zone spéciale',
-        };
-        const cs   = Number(congestionScore ?? 0);
-        const csPct = Math.round(cs * 100);
-        const csColor = cs < 0.25 ? '#2ecc71'
-                      : cs < 0.50 ? '#f1c40f'
-                      : cs < 0.75 ? '#e67e22'
-                      : '#e74c3c';
-        const csLabel = cs < 0.25 ? 'fluide'
-                      : cs < 0.50 ? 'modéré'
-                      : cs < 0.75 ? 'dense'
-                      : 'engorgé';
-        // ID unique pour pouvoir cibler la sparkline une fois la fetch arrivée
-        const sparkId = 'iris-spark-' + codeIris;
-        new (window as any).maplibregl.Popup({ className: 'nexus-popup', maxWidth: '320px' })
-          .setLngLat(e.lngLat)
-          .setHTML(`
-            <div style="line-height:1.55">
-              <b style="font-size:13px">${nomIris}</b><br>
-              <span style="opacity:.7;font-size:11px">Code IRIS : ${codeIris}</span><br>
-              <span style="opacity:.7;font-size:11px">Commune : ${nomCom} (${inseeComm})</span><br>
-              <span style="opacity:.7;font-size:11px">Type : ${typeLabel[typIris] ?? typIris}</span>
-              <hr style="margin:6px 0;opacity:.2">
-              <span style="font-size:12px">🚗 <b>${vehicleCount}</b> véh.</span>
-              &nbsp;·&nbsp;
-              <span style="font-size:12px">⚠️ <b>${incidentCount ?? 0}</b> incident${(incidentCount ?? 0) !== 1 ? 's' : ''}</span><br>
-              <span style="font-size:11px;opacity:.75">Vitesse moy. : <b>${avgSpeedKmh ?? 0}</b> km/h</span><br>
-              <span style="font-size:11px;opacity:.75">Densité : ${density} veh/km²</span><br>
-              <div style="margin-top:6px;font-size:11px">
-                Congestion :
-                <span style="color:${csColor};font-weight:600">${csLabel}</span>
-                <span style="opacity:.65">(${csPct}%)</span>
-              </div>
-              <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:3px">
-                <div style="height:100%;width:${csPct}%;background:${csColor}"></div>
-              </div>
-              <hr style="margin:8px 0 6px;opacity:.2">
-              <div style="font-size:10px;opacity:.65;letter-spacing:.6px;margin-bottom:2px">
-                HISTORIQUE 1 H
-              </div>
-              <div id="${sparkId}" style="height:42px">
-                <span style="font-size:10.5px;opacity:.5">chargement…</span>
-              </div>
-            </div>
-          `)
-          .addTo(map);
-        // Fetch + injection sparkline async (non bloquant pour l'ouverture du popup).
-        this.fetchAndDrawSparkline(codeIris, sparkId);
+        const p = f.properties;
+        this.selectZone(p.codeIris ?? null);
+        this.selectedZone.set({
+          codeIris:        p.codeIris,
+          nomIris:         p.nomIris,
+          typIris:         p.typIris,
+          nomCom:          p.nomCom,
+          inseeComm:       p.inseeComm,
+          vehicleCount:    Number(p.vehicleCount ?? 0),
+          density:         Number(p.density ?? 0),
+          avgSpeedKmh:     Number(p.avgSpeedKmh ?? 0),
+          incidentCount:   Number(p.incidentCount ?? 0),
+          congestionScore: Number(p.congestionScore ?? 0),
+        });
       });
       map.on('mouseenter', this.FILL_ID, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', this.FILL_ID, () => { map.getCanvas().style.cursor = 'crosshair'; });
@@ -313,38 +310,18 @@ export class IrisLayerService implements OnDestroy {
    * so MapLibre automatically re-evaluates the choropleth expression.
    */
   /**
-   * Récupère l'historique de congestion 1 h d'une zone et dessine une
-   * sparkline SVG dans l'élément {@code #containerId} du popup.
-   *
-   * Le rendu utilise un polyline SVG simple, sans librairie de charts.
-   * Couleurs interpolées : vert (0%) → rouge (100%).
+   * Public: fetch the 1 h congestion history for an IRIS zone. Returns the
+   * raw score array so callers can render their own sparkline (the
+   * dashboard's sidebar card does this).
    */
-  private fetchAndDrawSparkline(codeIris: string, containerId: string): void {
-    this.http.get<{ codeIris: string; points: number[] }>(
+  fetchHistory(codeIris: string) {
+    return this.http.get<{ codeIris: string; points: number[] }>(
       `${environment.backendUrl}/api/iris/${codeIris}/history`
-    ).subscribe({
-      next: data => {
-        const el = document.getElementById(containerId);
-        if (!el) return;       // popup déjà fermé
-        const pts = data?.points ?? [];
-        if (pts.length === 0) {
-          el.innerHTML =
-            `<span style="font-size:10.5px;opacity:.5">` +
-            `Données insuffisantes (vient juste d'être chargé).</span>`;
-          return;
-        }
-        el.innerHTML = this.buildSparklineSVG(pts);
-      },
-      error: () => {
-        const el = document.getElementById(containerId);
-        if (el) el.innerHTML =
-          `<span style="font-size:10.5px;opacity:.5">Historique indisponible.</span>`;
-      },
-    });
+    );
   }
 
-  /** Construit un SVG sparkline à partir d'un tableau de scores [0..1]. */
-  private buildSparklineSVG(points: number[]): string {
+  /** Public: build a self-contained SVG sparkline from a score array. */
+  buildSparklineSVG(points: number[]): string {
     const W = 280;
     const H = 42;
     const PAD = 4;
@@ -382,17 +359,21 @@ export class IrisLayerService implements OnDestroy {
                      : trend < -0.05 ? '#2ecc71'
                      : '#94a3b8';
 
+    // ID unique stable pour CE rendu : sinon les deux Date.now() peuvent
+    // tomber sur des ms différentes et la polyline pointe vers un gradient
+    // qui n'existe pas → fond cassé.
+    const gradId = 'sg-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
     return `
       <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}"
            preserveAspectRatio="none"
            style="display:block">
         <defs>
-          <linearGradient id="sg-${Date.now()}" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%"  stop-color="${lastColor}" stop-opacity="0.38"/>
             <stop offset="100%" stop-color="${lastColor}" stop-opacity="0.04"/>
           </linearGradient>
         </defs>
-        <polygon points="${areaPts}" fill="url(#sg-${Date.now()})"/>
+        <polygon points="${areaPts}" fill="url(#${gradId})"/>
         <polyline points="${linePts}"
                   fill="none"
                   stroke="${lastColor}"
