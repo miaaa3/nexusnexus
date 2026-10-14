@@ -26,10 +26,13 @@ import java.util.List;
 public class IrisZoneSystem {
 
     /** Recount interval — 4 Hz is more than enough for a UI label. */
+    // FR : on met à jour les statistiques IRIS toutes les 250 ms = 4 fois par seconde.
+    //      Le tick simulation tourne à 10 Hz mais l'analyse territoriale n'a pas besoin
+    //      d'être aussi rapide — l'œil ne voit pas la différence.
     private static final long REFRESH_MS = 250L;
 
-    private List<IrisZone> zones = Collections.emptyList();
-    private long lastRefreshMs  = 0L;
+    private List<IrisZone> zones = Collections.emptyList();   // liste des quartiers IRIS
+    private long lastRefreshMs  = 0L;                          // timestamp du dernier recount
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -56,30 +59,36 @@ public class IrisZoneSystem {
      * run the full ray-cast.
      */
     public void update(List<Vehicle> vehicles, long nowMs) {
-        if (zones.isEmpty()) return;
-        if (nowMs - lastRefreshMs < REFRESH_MS) return;
-        lastRefreshMs = nowMs;
+        if (zones.isEmpty()) return;                              // pas de zones chargées → on sort
+        if (nowMs - lastRefreshMs < REFRESH_MS) return;           // pas le moment de recalculer → on sort
+        lastRefreshMs = nowMs;                                    // on note l'heure du recalcul
 
+        // ÉTAPE 1 : on remet tous les compteurs à zéro
         for (IrisZone z : zones) {
-            z.count        = 0;
-            z.sumSpeedKmh  = 0.0;
-            z.incidents    = 0;
+            z.count        = 0;     // nombre de voitures dans le quartier
+            z.sumSpeedKmh  = 0.0;   // somme des vitesses (pour calculer la moyenne après)
+            z.incidents    = 0;     // nombre d'accidents dans le quartier
         }
 
+        // ÉTAPE 2 : pour chaque voiture, on cherche dans quel quartier elle est
         for (Vehicle v : vehicles) {
-            double lat = v.getLatitude();
+            double lat = v.getLatitude();                          // position de la voiture
             double lon = v.getLongitude();
-            double speed = v.getSpeed();
-            boolean wrecked = v.getWreckedUntilMs() > nowMs;
+            double speed = v.getSpeed();                           // vitesse actuelle
+            boolean wrecked = v.getWreckedUntilMs() > nowMs;       // accidentée ? (true/false)
             for (IrisZone z : zones) {
-                // Bbox pre-filter — rejects most vehicles in 4 comparisons
+                // FILTRE RAPIDE (bbox) : on regarde d'abord le rectangle qui entoure le quartier
+                // → 4 comparaisons super rapides, rejette 95% des cas
                 if (lon < z.minLon || lon > z.maxLon
                         || lat < z.minLat || lat > z.maxLat) continue;
+                // FILTRE PRÉCIS : test point-in-polygon (lancer de rayon pair/impair)
+                // → précis mais plus coûteux, fait seulement pour les 5% restants
                 if (!pointInPolygon(lon, lat, z.polygon)) continue;
 
-                z.count++;
-                z.sumSpeedKmh += speed;
-                if (wrecked) z.incidents++;
+                // La voiture est dans ce quartier → on met à jour les compteurs
+                z.count++;                       // une voiture de plus
+                z.sumSpeedKmh += speed;          // on ajoute sa vitesse à la somme
+                if (wrecked) z.incidents++;      // si elle est accidentée, on compte un incident
             }
         }
     }
@@ -88,24 +97,44 @@ public class IrisZoneSystem {
      * Free-flow target used as the denominator for the speed-deficit term of
      * the congestion score. 50 km/h is a reasonable urban free-flow speed.
      */
+    // FR : vitesse de référence en ville = 50 km/h (Code de la route en agglomération).
+    //      Sert de "100% fluide" — si les voitures roulent à 50, le score est à 0.
     private static final double FREE_FLOW_KMH = 50.0;
 
     /** Snapshot of all zones with current analytics (counts, speed, congestion). */
+    // FR : photo instantanée de tous les quartiers à un instant T.
+    //      Renvoyée à chaque appel REST /api/iris/zones pour le frontend.
     public List<IrisZoneStatus> snapshot() {
         List<IrisZoneStatus> out = new ArrayList<>(zones.size());
         for (IrisZone z : zones) {
+            // densité = nombre de voitures / surface (en voitures par km²)
             double density = z.areaSqKm > 0 ? z.count / z.areaSqKm : 0.0;
+            // vitesse moyenne = somme des vitesses / nombre de voitures
             double avg     = z.count > 0   ? z.sumSpeedKmh / z.count : 0.0;
 
-            // Congestion score combines speed deficit + incident penalty.
-            // Empty zones score 0 (free, not "frozen").
+            // ── CALCUL DU SCORE DE CONGESTION (0 = fluide, 1 = bloqué) ─────
+            // Formule : clamp01( (50 − vitesseMoyenne)/50 + min(0.4, 0.15 × accidents) )
+            // Quartier vide → score 0 (libre, pas "gelé")
             double congestion = 0.0;
             if (z.count > 0) {
+                // INGRÉDIENT 1 : déficit de vitesse
+                //   à 50 km/h  → 0   (rien à signaler)
+                //   à 25 km/h  → 0.5 (chargé)
+                //   à 0 km/h   → 1.0 (bloqué)
                 double speedDeficit = clamp01((FREE_FLOW_KMH - avg) / FREE_FLOW_KMH);
+
+                // INGRÉDIENT 2 : pénalité accidents
+                //   0 accident  → 0
+                //   1 accident  → 0.15
+                //   2 accidents → 0.30
+                //   3+          → 0.40 (plafonné, pour pas exploser le score)
                 double incPenalty   = Math.min(0.4, z.incidents * 0.15);
+
+                // On additionne les deux ingrédients et on plafonne entre 0 et 1
                 congestion = clamp01(speedDeficit + incPenalty);
             }
 
+            // On range tout ça dans un objet "status" qu'on enverra au frontend
             out.add(new IrisZoneStatus(
                     z.codeIris, z.nomIris, z.typIris,
                     z.nomCom,   z.inseeComm,
@@ -116,6 +145,11 @@ public class IrisZoneSystem {
         return out;
     }
 
+    // FR : "clamp" = forcer une valeur à rester entre 0 et 1.
+    //      Si v < 0  → renvoie 0
+    //      Si v > 1  → renvoie 1
+    //      Sinon     → renvoie v tel quel
+    //      Comme une note à l'école : pas plus que 20/20, pas moins que 0/20.
     private static double clamp01(double v) {
         return v < 0 ? 0 : (v > 1 ? 1 : v);
     }
@@ -179,15 +213,25 @@ public class IrisZoneSystem {
     // ── Ray-casting ───────────────────────────────────────────────────────────
 
     /** Standard even-odd ray-casting — works for convex and concave polygons. */
+    // FR : algorithme du LANCER DE RAYON (règle pair/impair).
+    //      On envoie un rayon imaginaire depuis la voiture vers la droite,
+    //      et on compte combien de fois il traverse les côtés du polygone.
+    //      Nombre IMPAIR de croisements → la voiture est DEDANS  ✅
+    //      Nombre PAIR  de croisements → la voiture est DEHORS   ❌
+    //      Marche pour TOUTES les formes (convexes ou concaves bizarres).
     private static boolean pointInPolygon(double x, double y, double[][] poly) {
-        boolean inside = false;
-        int n = poly.length;
+        boolean inside = false;          // au début, on est dehors
+        int n = poly.length;             // nombre de sommets du polygone
+        // On parcourt chaque côté du polygone : segment [poly[j] → poly[i]]
         for (int i = 0, j = n - 1; i < n; j = i++) {
-            double xi = poly[i][0], yi = poly[i][1];
-            double xj = poly[j][0], yj = poly[j][1];
+            double xi = poly[i][0], yi = poly[i][1];   // 1er sommet du côté
+            double xj = poly[j][0], yj = poly[j][1];   // 2e  sommet du côté
+            // Le rayon horizontal passant par y traverse-t-il ce côté ?
+            // 1) le côté doit être à cheval sur la ligne horizontale y
+            // 2) le croisement doit être à droite du point (x, y)
             if (((yi > y) != (yj > y))
                     && (x < (xj - xi) * (y - yi) / (yj - yi + 1e-18) + xi)) {
-                inside = !inside;
+                inside = !inside;        // un croisement de plus → on bascule dedans/dehors
             }
         }
         return inside;

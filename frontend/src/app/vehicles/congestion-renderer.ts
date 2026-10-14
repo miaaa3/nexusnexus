@@ -34,8 +34,8 @@ export class CongestionRenderer {
 
   // Grid configuration — dimensions are fixed (40×30 cells = 1200 instances),
   // but the *bounds* come from the backend's loaded road graph so the grid
-  // sits over the actual simulated area. The hard-coded Paris fallback only
-  // kicks in when the backend has not finished loading the OSM yet.
+  // sits over the actual simulated area. The hard-coded La Rochelle fallback
+  // only kicks in when the backend has not finished loading the OSM yet.
   private readonly LAT_MIN: number;
   private readonly LAT_MAX: number;
   private readonly LON_MIN: number;
@@ -60,12 +60,12 @@ export class CongestionRenderer {
   private readonly cellHH: number;   // half-height in mercator
 
   constructor(bounds?: { minLat: number; maxLat: number; minLon: number; maxLon: number }) {
-    // Fallback: original Paris extent — only used if the backend hasn't
+    // Fallback: La Rochelle extent — only used if the backend hasn't
     // returned its graph bounds yet (e.g. /api/simulation/bounds in flight).
-    this.LAT_MIN = bounds?.minLat ?? 48.82;
-    this.LAT_MAX = bounds?.maxLat ?? 48.90;
-    this.LON_MIN = bounds?.minLon ?? 2.28;
-    this.LON_MAX = bounds?.maxLon ?? 2.42;
+    this.LAT_MIN = bounds?.minLat ?? 46.12;
+    this.LAT_MAX = bounds?.maxLat ?? 46.22;
+    this.LON_MIN = bounds?.minLon ?? -1.22;
+    this.LON_MAX = bounds?.maxLon ?? -1.10;
     this.CELL_LON = (this.LON_MAX - this.LON_MIN) / this.COLS;
     this.CELL_LAT = (this.LAT_MAX - this.LAT_MIN) / this.ROWS;
 

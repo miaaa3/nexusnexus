@@ -14,12 +14,12 @@ export interface MapStyleOption {
 }
 
 /**
- * Built-in inline CartoDB dark raster style (no external style JSON needed).
+ * Built-in inline dark raster style (inverted OSM tiles) (no external style JSON needed).
  * Buildings are not available in raster tiles.
  */
 const RASTER_STYLE: MapStyleOption = {
   id: 'dark-raster',
-  name: 'Dark (CartoDB)',
+  name: 'Dark (OSM)',
   supportsBuildings: false,
   styleUrl: null,
 };
@@ -71,23 +71,31 @@ export class MapStyleService {
   /** Returns the MapLibre style object/URL for the current style. */
   getMapLibreStyle(style: MapStyleOption): any {
     if (style.styleUrl) return style.styleUrl;
-    // Inline CartoDB dark raster
+    // Inline dark raster: CARTO's basemaps now need an API key, so we use the
+    // standard OSM tiles and invert them on the GPU (brightness min/max
+    // swapped + hue rotation) to get the same dark look with no key.
     return {
       version: 8,
       glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
       sources: {
-        'carto-dark': {
+        'osm-dark': {
           type: 'raster',
-          tiles: [
-            'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-            'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-            'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          ],
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
           tileSize: 256,
-          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          maxzoom: 19,
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         }
       },
-      layers: [{ id: 'background', type: 'raster', source: 'carto-dark' }]
+      layers: [{
+        id: 'background', type: 'raster', source: 'osm-dark',
+        paint: {
+          'raster-brightness-min': 0.92,
+          'raster-brightness-max': 0.08,
+          'raster-saturation': -0.75,
+          'raster-hue-rotate': 200,
+          'raster-contrast': 0.15,
+        }
+      }]
     };
   }
 }

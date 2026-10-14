@@ -194,7 +194,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    * Pull the road graph bounds from the backend so the congestion grid
    * sizes its cells around the actual simulated area. Re-creates the
    * congestion renderer when the response arrives if initLayers has
-   * already run with stale (Paris fallback) bounds.
+   * already run with stale (La Rochelle fallback) bounds.
    */
   private fetchGraphBounds(): void {
     this.http.get<{ minLat: number; maxLat: number; minLon: number; maxLon: number }>(
@@ -203,14 +203,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       next: b => {
         this.graphBounds = b;
         if (this.congestionRenderer && this.map?.loaded()) {
-          // Renderer was already built with Paris fallback — swap it out so
-          // the cells actually overlay the simulated city.
+          // Renderer was already built with La Rochelle fallback — swap it
+          // out so the cells actually overlay the simulated city.
           try { this.map.removeLayer(this.congestionRenderer.id); } catch { /* not added yet */ }
           this.congestionRenderer = new CongestionRenderer(this.graphBounds);
           this.map.addLayer(this.congestionRenderer as any, this.trailRenderer?.id);
         }
       },
-      error: () => { /* keep Paris fallback — at least the layer renders somewhere */ }
+      error: () => { /* keep La Rochelle fallback — at least the layer renders somewhere */ }
     });
   }
 
@@ -282,7 +282,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // the actual simulated city. The fetch is fire-and-forget — if it lands
     // before initLayers (cached on style switch), great; otherwise we recreate
     // the renderer once it returns. Without this the layer renders silently
-    // off-map for any city other than the original Paris demo.
+    // off-map for any city other than the original La Rochelle demo.
     this.congestionRenderer = new CongestionRenderer(this.graphBounds);
     this.trailRenderer      = new TrailRenderer();
     this.vehicleRenderer    = new VehicleRenderer();

@@ -33,7 +33,7 @@ public class SimulationController {
      * Bounding box of the currently-loaded road graph. Used by the frontend
      * congestion grid to size its cells around the actual simulation area
      * instead of relying on hard-coded coords (which only worked for the
-     * original Paris demo and silently broke the layer for every other city).
+     * original La Rochelle demo and silently broke the layer for every other city).
      * Returns 204 if the graph is not yet loaded.
      */
     @GetMapping("/bounds")

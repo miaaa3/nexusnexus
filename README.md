@@ -5,9 +5,28 @@ Angular + WebGL frontend, Spring Boot backend, OpenStreetMap routing,
 INSEE IRIS territorial analytics — handles 15 000+ moving vehicles
 streamed over WebSocket with sub-100 ms latency.
 
-![status](https://img.shields.io/badge/status-alpha-orange)
-![java](https://img.shields.io/badge/java-21-blue)
-![angular](https://img.shields.io/badge/angular-17-red)
+![java](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white)
+![spring](https://img.shields.io/badge/Spring%20Boot-3-6DB33F?logo=springboot&logoColor=white)
+![angular](https://img.shields.io/badge/Angular-17-DD0031?logo=angular&logoColor=white)
+![webgl](https://img.shields.io/badge/WebGL2-instanced-990000?logo=webgl&logoColor=white)
+![license](https://img.shields.io/badge/license-MIT-blue)
+
+<p align="center">
+  <img src="screenshots/demo.gif" alt="6,000 vehicles streamed live over La Rochelle: rush hour, heat-map and 3D view" width="100%" />
+</p>
+
+## What you can do with it
+
+- **Watch a whole city move** — thousands of vehicles (cars, buses, trucks, motorbikes, emergency vehicles) drive on the real OpenStreetMap road network of La Rochelle, routed with A\* and rendered at 60 FPS in the browser.
+- **Play with scenarios** — one-click *Rush hour*, *Accidents*, *Emergency*, *IRIS focus* and a *15K stress test*; drop incidents on the map and watch traffic re-route around them.
+- **Read the city** — congestion and density heat-maps, a 3D tilted view, live speed distribution, and per-neighbourhood analytics from INSEE IRIS zones (top congested areas, vehicles per zone).
+- **Inspect anything** — click a vehicle to follow it, replay the last 60 s, import another city's `.osm` map at runtime.
+
+| Rush hour | Heat-map | 3D view |
+|---|---|---|
+| ![Rush hour](screenshots/rush-hour.jpg) | ![Heat-map](screenshots/heatmap.jpg) | ![3D view](screenshots/3d-view.jpg) |
+| **IRIS territorial analytics** | **Vehicle inspector** | **Event feed** |
+| ![IRIS zones](screenshots/iris.jpg) | ![Selected vehicle](screenshots/selected.jpg) | ![Events](screenshots/events.jpg) |
 
 ---
 
@@ -33,7 +52,6 @@ streamed over WebSocket with sub-100 ms latency.
 │   └── data/iris/          → optional iris.geojson (gitignored, see below)
 ├── frontend/               Angular app
 │   └── src/app/
-├── FEATURES.md             Inventory of what's done / missing / next
 └── README.md               you are here
 ```
 
@@ -146,7 +164,6 @@ the dashboard fills with live vehicles within ~1 s.
 - **WebGL2 instanced rendering** — single `drawArraysInstanced` per frame, 20 K instance slots in DYNAMIC_DRAW buffer.
 - **Compact wire format** — lat/lon rounded to 5 dp (~1 m), speed to 1 dp, direction to int; `wrecked: false` omitted.
 
-See [`FEATURES.md`](./FEATURES.md) for the full inventory and roadmap.
 
 ---
 
@@ -169,12 +186,11 @@ nexus:
 
 ## Project status
 
-Alpha — actively developed. See [`FEATURES.md`](./FEATURES.md) for what's
-implemented and the prioritised roadmap.
+Actively developed as a Master's project (M2 Informatique et Mobilité, Université de Haute-Alsace).
+Base map: OpenStreetMap tiles, darkened on the GPU with MapLibre raster paint properties (no API key needed).
 
 ---
 
 ## License
 
-TODO — pick a license (MIT? Apache 2.0?) and replace this section before
-making the repo public.
+[MIT](LICENSE) © 2026 Meryem Belmouaddine. Map data © OpenStreetMap contributors, IRIS data © INSEE / IGN.

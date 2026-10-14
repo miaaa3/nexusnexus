@@ -40,16 +40,17 @@ export class DemoModeService {
   readonly status = signal<string>('');
 
   /**
-   * 🌅 Rush hour — moderate fleet (~6 000), normal speed, RUSH_HOUR traffic
-   * mode. The IRIS choropleth + Events overlay are auto-enabled so the
-   * resulting jams are visible.
+   * 🌅 Rush hour — moderate fleet (~6 000), accelerated time (2×) so the
+   * congestion patterns build up visibly within a few seconds, RUSH_HOUR
+   * traffic mode. The IRIS choropleth + Events overlay are auto-enabled
+   * so the resulting jams are visible.
    */
   async rushHour(): Promise<void> {
     await this.run('🌅 Rush hour', async () => {
       this.ensureLayer('iris', true);
       this.ensureLayer('incidents', true);
       await this.setVehicles(6000);
-      await this.setSpeed(1.0);
+      await this.setSpeed(2.0);
       await this.setTrafficMode('RUSH_HOUR');
     });
   }

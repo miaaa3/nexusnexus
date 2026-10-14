@@ -4,9 +4,9 @@ import { VehicleUpdate, VEHICLE_COLORS, VEHICLE_SIZES, WRECK_COLOR, WRECK_SIZE }
 /**
  * Squared mercator-distance threshold above which a frame-to-frame jump is
  * treated as a backend re-spawn rather than honest movement. 0.0005 mercator
- * units ≈ 55 m at Paris latitude; squared = 2.5e-7. A car at 250 km/h covers
- * ~14 m in 200 ms, well under the threshold, so honest fast vehicles still
- * interpolate; only true teleports get snapped.
+ * units ≈ 55 m at La Rochelle latitude; squared = 2.5e-7. A car at 250 km/h
+ * covers ~14 m in 200 ms, well under the threshold, so honest fast vehicles
+ * still interpolate; only true teleports get snapped.
  */
 const TELEPORT_SQ_THRESHOLD = 2.5e-7;
 
@@ -41,11 +41,13 @@ export class VehicleRenderer {
   private instanceBuffer!: WebGLBuffer;
   private quadBuffer!: WebGLBuffer;
 
-  // 20 000 instance slots ≈ 800 KB of GPU-resident DYNAMIC_DRAW buffer.
-  // Still well within any consumer GPU's headroom and matches the backend
-  // hard cap in SimulationConfig.maxVehicles.
+  // FR : TAILLE MAX DU BUFFER = 20 000 voitures.
+  //      20 000 × 10 floats × 4 octets = 800 Ko alloués UNE FOIS dans la VRAM du GPU.
+  //      Doit matcher le plafond backend dans SimulationConfig.maxVehicles.
   private readonly MAX_VEHICLES = 20000;
+  // FR : Chaque voiture = 10 valeurs (x, y, vitesse, direction, couleurR, G, B, taille, sélectionnée, type)
   private readonly FLOATS_PER_VEHICLE = 10;
+  // FR : Le grand tableau qu'on enverra au GPU à chaque frame
   private instanceData: Float32Array;
 
   private prevPositions: Float32Array;
@@ -89,28 +91,42 @@ export class VehicleRenderer {
     this.initGL(this.gl);
   }
 
+  // ═════════════════════════════════════════════════════════════════════════
+  // FR : LA MÉTHODE DE RENDU — appelée par MapLibre à chaque frame (60 fois/sec)
+  //      C'est ICI qu'on dessine les 20 000 voitures D'UN SEUL COUP avec WebGL2.
+  // ═════════════════════════════════════════════════════════════════════════
   render(gl: WebGL2RenderingContext | WebGLRenderingContext, matrix: number[]): void {
     const gl2 = gl as WebGL2RenderingContext;
-    if (this.vehicleCount === 0) return;
+    if (this.vehicleCount === 0) return;        // 0 voiture → rien à dessiner
 
+    // ÉTAPE 1 : interpolation — on calcule la position lissée entre 2 frames serveur
     const t = performance.now();
-    const alpha = this.computeAlpha(t);
-    this.interpolatePositions(alpha);
+    const alpha = this.computeAlpha(t);          // alpha ∈ [0, 1] : 0=prev, 1=next
+    this.interpolatePositions(alpha);            // lerp(prev, next, alpha)
 
+    // ÉTAPE 2 : on dit au GPU quel programme shader utiliser
     gl2.useProgram(this.program);
-    gl2.uniformMatrix4fv(this.uMatrix, false, matrix);
-    gl2.uniform2f(this.uViewport, gl2.drawingBufferWidth, gl2.drawingBufferHeight);
-    gl2.uniform1f(this.uPixelRatio, devicePixelRatio ?? 1);
-    gl2.uniform1f(this.uTime, t * 0.001);
-    gl2.uniform1f(this.uLodMode, this.lodMode());
+    // ÉTAPE 3 : on passe les UNIFORMS (variables globales du shader)
+    gl2.uniformMatrix4fv(this.uMatrix, false, matrix);                        // matrice carte
+    gl2.uniform2f(this.uViewport, gl2.drawingBufferWidth, gl2.drawingBufferHeight); // taille écran
+    gl2.uniform1f(this.uPixelRatio, devicePixelRatio ?? 1);                    // densité pixels (retina)
+    gl2.uniform1f(this.uTime, t * 0.001);                                      // temps (pour animations)
+    gl2.uniform1f(this.uLodMode, this.lodMode());                              // mode LOD (compact/détaillé)
 
+    // ÉTAPE 4 : on téléverse le tableau des voitures dans le buffer GPU
     gl2.bindBuffer(gl2.ARRAY_BUFFER, this.instanceBuffer);
     gl2.bufferSubData(gl2.ARRAY_BUFFER, 0, this.instanceData, 0,
       this.vehicleCount * this.FLOATS_PER_VEHICLE);
 
+    // ÉTAPE 5 : on active le blending (transparence)
     gl2.bindVertexArray(this.vao);
     gl2.enable(gl2.BLEND);
     gl2.blendFunc(gl2.SRC_ALPHA, gl2.ONE_MINUS_SRC_ALPHA);
+
+    // ⭐ ÉTAPE 6 : L'INSTRUCTION MAGIQUE — drawArraysInstanced
+    //    En UN SEUL appel CPU → GPU, on dessine vehicleCount voitures.
+    //    Le GPU exécute le vertex shader en PARALLÈLE pour chaque instance.
+    //    C'est ce qui nous permet de tenir 60 FPS à 15K voitures.
     gl2.drawArraysInstanced(gl2.TRIANGLE_FAN, 0, 4, this.vehicleCount);
     gl2.bindVertexArray(null);
 
@@ -172,7 +188,7 @@ export class VehicleRenderer {
       if (prev) {
         const dx = mercX - prev[0];
         const dy = mercY - prev[1];
-        // 0.0005 mercator ≈ 55 m at Paris latitude; a vehicle at 250 km/h
+        // 0.0005 mercator ≈ 55 m at La Rochelle latitude; a vehicle at 250 km/h
         // covers ~14 m in 200 ms, so anything past this threshold is a
         // backend re-spawn, not honest motion.
         if (dx * dx + dy * dy < TELEPORT_SQ_THRESHOLD) {
@@ -257,30 +273,42 @@ export class VehicleRenderer {
     this.uTime       = gl.getUniformLocation(this.program, 'u_time')!;
     this.uLodMode    = gl.getUniformLocation(this.program, 'u_lodMode')!;
 
+    // FR : LE QUAD = un petit rectangle (4 sommets) qui sert de "tampon" pour chaque voiture.
+    //      C'est le seul modèle qu'on définit. Le GPU le réutilisera 20 000 fois.
     const quad = new Float32Array([-1, -1,  1, -1,  1, 1,  -1, 1]);
     this.quadBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);     // STATIC = on ne le change jamais
 
+    // FR : LE BUFFER D'INSTANCES = un grand tableau dans la VRAM du GPU.
+    //      On y mettra les données des 20 000 voitures (position, couleur, taille, etc.)
+    //      DYNAMIC_DRAW = on prévient le GPU qu'on changera ces données souvent.
     this.instanceBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, this.MAX_VEHICLES * this.FLOATS_PER_VEHICLE * 4, gl.DYNAMIC_DRAW);
 
+    // FR : VAO = Vertex Array Object — c'est une "recette" qui dit au GPU
+    //      comment lire les buffers (quel attribut commence où dans la mémoire).
     this.vao = gl.createVertexArray()!;
     gl.bindVertexArray(this.vao);
 
-    // Attrib 0: quad vertex
+    // ── Attribut 0 : sommet du quad (partagé par toutes les instances) ──
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    // Pas de vertexAttribDivisor → cet attribut change à chaque sommet (les 4 du quad)
 
-    // Per-instance attribs (stride = 10 floats = 40 bytes)
+    // ── Attributs PAR INSTANCE (changent à chaque voiture) ──
+    // stride = 10 floats × 4 octets = 40 octets par voiture
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     const stride = this.FLOATS_PER_VEHICLE * 4;
 
-    // a_position (mercX, mercY)
+    // Attribut 1 : position (mercatorX, mercatorY) — 2 floats
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 0);
+    // ⭐ LA LIGNE MAGIQUE : vertexAttribDivisor(1, 1)
+    //    "Avance dans le buffer UNE FOIS PAR INSTANCE, pas par sommet"
+    //    → c'est CE truc qui rend l'instanced rendering possible.
     gl.vertexAttribDivisor(1, 1);
 
     // a_color (r, g, b)

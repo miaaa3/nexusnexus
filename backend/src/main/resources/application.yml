@@ -18,10 +18,10 @@ nexus:
     update-rate-ms: 100       # update interval (10 fps server-side, client interpolates)
     max-vehicles: 20000       # hard cap for performance — 15K+ comfortably
     area:
-      lat-min: 48.82
-      lat-max: 48.90
-      lon-min: 2.28
-      lon-max: 2.42           # Paris bounding box
+      lat-min: 46.12
+      lat-max: 46.22
+      lon-min: -1.22
+      lon-max: -1.10          # La Rochelle bounding box
     graph-source: local-file  # local-file | overpass
     # OSM file parsed at startup when graph-source = local-file.
     # Absolute path, or relative to the backend working directory.

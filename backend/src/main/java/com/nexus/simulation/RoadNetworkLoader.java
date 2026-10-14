@@ -18,7 +18,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Fetches the Paris road network from the Overpass API and builds
+ * Fetches the La Rochelle road network from the Overpass API and builds
  * a {@link RoadGraph} for use by the simulation engine.
  *
  * Called once at startup. If the fetch fails (network unavailable,
@@ -56,7 +56,7 @@ public class RoadNetworkLoader implements RoadGraphProvider {
                 area.getLatMax(), area.getLonMax()
         );
 
-        log.info("Fetching Paris road network from Overpass API…");
+        log.info("Fetching La Rochelle road network from Overpass API…");
         try {
             String body = fetchOverpass(query);
             RoadGraph graph = parse(body);

@@ -82,6 +82,28 @@ export class IrisLayerService implements OnDestroy {
     this.loadZones();
   }
 
+  /**
+   * Re-fetch the IRIS GeoJSON from the backend and refresh the map source.
+   * Called after the user uploads a new OSM map — the backend reloads IRIS
+   * zones asynchronously for the new city's bounds, and we poll a few times
+   * until the new zones become available (they can take 5–30 s via IGN WFS).
+   *
+   * FR : Rappelé après chaque upload OSM. Le backend recharge les zones IRIS
+   *      pour la nouvelle ville en arrière-plan ; on retente plusieurs fois
+   *      jusqu'à ce que les nouvelles zones soient prêtes (IGN WFS peut être
+   *      lent, 5–30 s). Une fois récupérées, on remplace la source GeoJSON
+   *      de MapLibre et la couche se redessine automatiquement.
+   */
+  reload(): void {
+    if (!this.map) return;
+    // Reset l'état avant de retenter
+    this.ready = false;
+    this.cleanup();
+    this.selectedCodeIris = null;
+    this.selectedZone.set(null);
+    this.loadZonesWithRetry(0);
+  }
+
   show(): void {
     this.visible = true;
     if (this.ready) this.setLayerVisibility('visible');
@@ -146,6 +168,51 @@ export class IrisLayerService implements OnDestroy {
       },
       error: err => {
         console.warn('[IrisLayer] Could not load IRIS zones:', err.message ?? err);
+      },
+    });
+  }
+
+  /**
+   * Retrying variant used by {@link reload}. The backend can take 5–30 s to
+   * fetch IRIS zones from IGN WFS after an OSM upload; we retry every 3 s up
+   * to 12 times (= 36 s max wait) before giving up silently. The user can
+   * always click the IRIS toggle again if the WFS was unreachable.
+   *
+   * FR : Variante avec nouvelles tentatives. Après un upload OSM, le backend
+   *      met 5 à 30 secondes pour récupérer les zones IRIS via l'IGN WFS.
+   *      On retente toutes les 3 secondes, jusqu'à 12 fois (= 36 s max).
+   */
+  private loadZonesWithRetry(attempt: number): void {
+    const MAX_ATTEMPTS = 12;
+    const RETRY_DELAY_MS = 3_000;
+    this.http.get<any>(`${environment.backendUrl}/api/iris/zones`).subscribe({
+      next: geojson => {
+        if (!this.map) return;
+        const count = geojson?.features?.length ?? 0;
+        if (count === 0) {
+          // Zones pas encore prêtes côté backend → on retente
+          if (attempt < MAX_ATTEMPTS) {
+            console.info(`[IrisLayer] Zones not ready yet, retry ${attempt + 1}/${MAX_ATTEMPTS} in ${RETRY_DELAY_MS / 1000}s…`);
+            setTimeout(() => this.loadZonesWithRetry(attempt + 1), RETRY_DELAY_MS);
+          } else {
+            console.warn('[IrisLayer] Gave up reloading IRIS zones after upload — IGN WFS unreachable or non-French map.');
+          }
+          return;
+        }
+        // Nouvelles zones disponibles → on met à jour la source MapLibre
+        this.registerSource(geojson);
+        this.registerLayers();
+        this.ready = true;
+        this.setLayerVisibility(this.visible ? 'visible' : 'none');
+        this.startPolling();
+        console.info(`[IrisLayer] Reloaded ${count} IRIS zones for the new map.`);
+      },
+      error: err => {
+        if (attempt < MAX_ATTEMPTS) {
+          setTimeout(() => this.loadZonesWithRetry(attempt + 1), RETRY_DELAY_MS);
+        } else {
+          console.warn('[IrisLayer] Final reload failed:', err.message ?? err);
+        }
       },
     });
   }

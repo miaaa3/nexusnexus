@@ -8,7 +8,7 @@
  *       OpenFreeMap light: 'https://tiles.openfreemap.org/styles/positron'
  *   - For a local tile server, see CUSTOM_OSM_MAP.md.
  *
- * Leave VECTOR_STYLE_URL empty ('') to use the default CartoDB dark raster tiles.
+ * Leave VECTOR_STYLE_URL empty ('') to use the default dark raster tiles (inverted OSM).
  */
 export const environment = {
   production: false,
@@ -16,7 +16,7 @@ export const environment = {
 
   /**
    * Optional: URL to a MapLibre-compatible vector tile style JSON.
-   * Leave empty to use the built-in CartoDB dark raster style.
+   * Leave empty to use the built-in dark raster style.
    * Required for 3D building extrusion.
    */
   VECTOR_STYLE_URL: 'https://tiles.openfreemap.org/styles/dark',

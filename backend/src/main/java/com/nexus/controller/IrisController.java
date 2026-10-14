@@ -104,11 +104,11 @@ public class IrisController {
      *       "type": "Feature",
      *       "geometry": { "type": "Polygon", "coordinates": [ [[lon,lat], ...] ] },
      *       "properties": {
-     *         "codeIris": "751010101",
-     *         "nomIris":  "Jardin des Plantes",
+     *         "codeIris": "171300101",
+     *         "nomIris":  "Vieux-Port",
      *         "typIris":  "H",
-     *         "nomCom":   "Paris",
-     *         "inseeComm":"75101",
+     *         "nomCom":   "La Rochelle",
+     *         "inseeComm":"17300",
      *         "vehicleCount": 12,
      *         "density": 45.3
      *       }

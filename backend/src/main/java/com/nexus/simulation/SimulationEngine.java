@@ -131,8 +131,13 @@ public class SimulationEngine {
      * 8 000 A* per second covers an 18 K spawn in about 2 s instead of 4-5.
      * The cache absorbs most of the work so the actual CPU bump is modest.
      */
+    // FR : BUDGET A* PAR TICK = 800 calculs de route max par tick.
+    //      Pourquoi ? Si on devait calculer 18 000 routes A* d'un coup, le serveur
+    //      figerait pendant plusieurs secondes. À 800 par tick × 10 ticks/sec =
+    //      8 000 routes/seconde, on étale la charge sur 2 secondes.
+    //      Le cache LRU absorbe la plupart des calculs (chemins réutilisés).
     private static final int MAX_PATHS_PER_TICK = 800;
-    private int pathBudgetThisTick = 0;
+    private int pathBudgetThisTick = 0;            // budget restant pour ce tick
 
     // ── A* route cache + hot-edge avoidance ──────────────────────────────────
     /** Vehicles on the same directed edge above this count → mark as hot. */
@@ -233,33 +238,47 @@ public class SimulationEngine {
 
     // ─── Tick ─────────────────────────────────────────────────────────────────
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FR : LE CŒUR DE LA SIMULATION — appelé toutes les 100 ms par le scheduler.
+    //      C'est ici que TOUT se passe : on avance le temps, on met à jour les
+    //      voitures, les accidents, les zones IRIS, les feux, etc.
+    //      → 10 fois par seconde, on rejoue ce cycle.
+    // ═══════════════════════════════════════════════════════════════════════════
     public void tick(long deltaMs) {
-        // Drain pending spawns BEFORE taking the read lock — addAll on
-        // CopyOnWriteArrayList takes its own internal lock and we don't want
-        // to escalate to the write lock from inside the read-locked tick.
+        // ÉTAPE 0 : on crée les nouvelles voitures en attente (par paquets de 500)
+        //           AVANT de prendre le verrou de lecture — sinon ça bloquerait.
         drainPendingSpawn();
 
-        simulationLock.readLock().lock();
+        simulationLock.readLock().lock();        // on verrouille pour la lecture
         try {
-            if (paused) return;   // positions frozen; broadcaster still sends unchanged state
-            trafficTime.advance(deltaMs);
+            if (paused) return;                  // simulation en pause → on sort
+            trafficTime.advance(deltaMs);        // on avance l'horloge simulée
 
+            // Récup le mode courant (NORMAL / RUSH_HOUR / NIGHT) et ses paramètres
             TrafficMode mode   = trafficTime.getMode();
+            // dt = pas de temps en secondes, ajusté par le multiplicateur et le mode
             double      dt     = (deltaMs / 1000.0) * speedMultiplier * mode.speedFactor();
-            double      jitter = mode.variance();
-            var         rng    = ThreadLocalRandom.current();
+            double      jitter = mode.variance();           // variance des vitesses
+            var         rng    = ThreadLocalRandom.current(); // générateur aléatoire thread-local
 
-            if (graph == null) return;
-            long nowMs = System.currentTimeMillis();
-            accidents.update(vehicles, nowMs);
-            zones.update(vehicles, nowMs);          // throttled to 4 Hz internally
-            irisZones.update(vehicles, nowMs);      // throttled to 4 Hz internally
-            refreshHotEdges(nowMs);                 // throttled to 1 Hz internally
-            computeFrontGaps();
+            if (graph == null) return;                       // pas de carte chargée → on sort
+            long nowMs = System.currentTimeMillis();         // timestamp courant
+
+            // ÉTAPE 1 : on met à jour tous les sous-systèmes
+            accidents.update(vehicles, nowMs);   // accidents (apparitions/disparitions)
+            zones.update(vehicles, nowMs);       // zones simples (4 Hz interne)
+            irisZones.update(vehicles, nowMs);   // zones IRIS — congestion par quartier (4 Hz)
+            refreshHotEdges(nowMs);              // routes saturées pour A* (1 Hz interne)
+            computeFrontGaps();                  // calcul distance à la voiture de devant
+
+            // ÉTAPE 2 : on alloue un BUDGET de calculs A* pour ce tick
+            //           → évite que tout calcule en même temps et fige le serveur
             pathBudgetThisTick = MAX_PATHS_PER_TICK;
+
+            // ÉTAPE 3 : on fait avancer CHAQUE voiture le long de sa route
             for (var v : vehicles) advanceOnRoad(v, dt, rng, jitter, nowMs);
         } finally {
-            simulationLock.readLock().unlock();
+            simulationLock.readLock().unlock();  // on libère le verrou
         }
     }
 
@@ -777,12 +796,12 @@ public class SimulationEngine {
     private List<IrisZoneSystem.IrisZone> loadIrisZones(RoadGraph.Bounds b) {
         var local = irisLoader.loadFromFile(Path.of(config.getIrisLocalFile()));
         // Before trusting the local file, check that its polygons actually
-        // sit anywhere near the loaded road graph. The repo ships with a
-        // Paris IRIS GeoJSON that silently produced an empty visual when the
-        // map switched to La Rochelle — zones rendered hundreds of km off-
-        // screen. If less than 5% of the local zones intersect the graph
-        // bounds, treat the file as "wrong city" and fall back to the WFS
-        // which we can ask for the actual region.
+        // sit anywhere near the loaded road graph. If the local IRIS file
+        // was built for a different city than the active OSM, its zones
+        // would render hundreds of km off-screen. If less than 5% of the
+        // local zones intersect the graph bounds, treat the file as
+        // "wrong city" and fall back to the IGN WFS which we can ask for
+        // the actual region.
         if (!local.isEmpty() && intersectsBounds(local, b) > 0.05) {
             log.info("Using local IRIS file ({} zones) for bounds {}", local.size(), b);
             return local;
@@ -836,19 +855,25 @@ public class SimulationEngine {
      * jump 500 → 18 000 fully resolves in about 3.5 s of steady ramp instead
      * of one catastrophic dump.
      */
+    // FR : CRÉATION PROGRESSIVE DES VOITURES (par paquets).
+    //      Quand l'utilisateur demande 18 000 voitures, on ne les crée PAS d'un coup
+    //      (sinon le serveur fige 3 secondes). On les met dans une file d'attente
+    //      "pendingSpawn", et à chaque tick on en sort un paquet de SPAWN_BATCH_PER_TICK
+    //      (~500). En 3-4 secondes, toutes les voitures sont en place sans freeze.
     private void drainPendingSpawn() {
-        if (pendingSpawn.isEmpty()) return;
+        if (pendingSpawn.isEmpty()) return;                   // rien à créer → on sort
         int batch = 0;
         List<Vehicle> chunk = new ArrayList<>(SPAWN_BATCH_PER_TICK);
         Vehicle v;
+        // On prend max SPAWN_BATCH_PER_TICK voitures de la file
         while (batch < SPAWN_BATCH_PER_TICK && (v = pendingSpawn.pollFirst()) != null) {
             chunk.add(v);
             batch++;
         }
         if (chunk.isEmpty()) return;
-        simulationLock.writeLock().lock();
+        simulationLock.writeLock().lock();                    // verrou écriture
         try {
-            vehicles.addAll(chunk);
+            vehicles.addAll(chunk);                            // on ajoute le paquet à la flotte
         } finally {
             simulationLock.writeLock().unlock();
         }
@@ -914,6 +939,12 @@ public class SimulationEngine {
                 current, target, vehicles.size(), pendingSpawn.size());
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FR : REMPLACE LE GRAPHE ROUTIER À LA VOLÉE (suite à un upload OSM).
+    //      Reset tous les états liés à l'ancienne carte : accidents, incidents,
+    //      route cache, hot edges, ET zones IRIS — qui sont rechargées en
+    //      ARRIÈRE-PLAN pour la nouvelle ville (peut prendre 5-30 s via IGN WFS).
+    // ═══════════════════════════════════════════════════════════════════════════
     public void replaceGraph(RoadGraph newGraph, String mapName) {
         if (newGraph == null || newGraph.isEmpty() || !newGraph.bounds().isValid()) {
             throw new IllegalArgumentException("Imported road graph is empty or invalid");
@@ -935,6 +966,11 @@ public class SimulationEngine {
             routeCache.clear();          // stale node IDs from the previous graph
             hotEdges = java.util.Set.of();
             hotGeneration++;
+            // FR : on vide les zones IRIS de l'ancienne ville pour que la couche
+            //      ne montre rien pendant que le rechargement async tourne.
+            //      Sans ça, l'utilisateur verrait les polygones de La Rochelle
+            //      flotter au milieu d'une autre ville pendant quelques secondes.
+            irisZones.loadZones(java.util.List.of());
             vehicles.addAll(spawned);
 
             paused = wasPaused;
@@ -943,6 +979,38 @@ public class SimulationEngine {
         } finally {
             simulationLock.writeLock().unlock();
         }
+
+        // FR : RECHARGEMENT DES ZONES IRIS POUR LA NOUVELLE VILLE — EN ASYNCHRONE.
+        //      On ne bloque pas la requête HTTP d'upload : le WFS IGN peut mettre
+        //      jusqu'à 30 secondes, ce qui serait pénible pour l'utilisateur.
+        //      Le frontend récupère les nouvelles zones via son polling REST
+        //      /api/iris/zones quand elles sont prêtes.
+        reloadIrisAsync(mapName);
+    }
+
+    // FR : Recharge les zones IRIS dans un thread daemon (background).
+    //      Le frontend détectera automatiquement les nouvelles zones via son
+    //      polling périodique sur /api/iris/zones.
+    private void reloadIrisAsync(String mapName) {
+        Thread t = new Thread(() -> {
+            try {
+                log.info("[IRIS] Background reload started for map '{}'", mapName);
+                long t0 = System.currentTimeMillis();
+                int count = reloadIris();
+                long ms = System.currentTimeMillis() - t0;
+                if (count > 0) {
+                    log.info("[IRIS] Background reload OK — {} zones loaded for '{}' in {} ms",
+                            count, mapName, ms);
+                } else {
+                    log.warn("[IRIS] Background reload returned 0 zones for '{}' " +
+                             "(IGN WFS unreachable, or zones outside French territory)", mapName);
+                }
+            } catch (Exception e) {
+                log.warn("[IRIS] Background reload failed for '{}': {}", mapName, e.getMessage());
+            }
+        }, "iris-reload-" + mapName);
+        t.setDaemon(true);          // pas bloquant à l'arrêt du serveur
+        t.start();
     }
 
     // ─── Geo helpers ──────────────────────────────────────────────────────────
