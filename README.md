@@ -10,6 +10,8 @@ streamed over WebSocket with sub-100 ms latency.
 ![angular](https://img.shields.io/badge/Angular-17-DD0031?logo=angular&logoColor=white)
 ![webgl](https://img.shields.io/badge/WebGL2-instanced-990000?logo=webgl&logoColor=white)
 ![license](https://img.shields.io/badge/license-MIT-blue)
+[![CI](https://github.com/miaaa3/nexusnexus/actions/workflows/ci.yml/badge.svg)](https://github.com/miaaa3/nexusnexus/actions/workflows/ci.yml)
+![docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)
 
 <p align="center">
   <img src="screenshots/demo.gif" alt="6,000 vehicles streamed live over La Rochelle: rush hour, heat-map and 3D view" width="100%" />
@@ -126,6 +128,41 @@ npm start
 
 Frontend on **http://localhost:4200**. WebSocket auto-connects to the backend;
 the dashboard fills with live vehicles within ~1 s.
+
+---
+
+## Run with Docker
+
+Only Docker is needed. Maps are not in the repo (10-300 MB each), so drop an
+`.osm` in `backend/data/maps/` first, then:
+
+```bash
+NEXUS_MAP=la-rochelle.osm docker compose up --build
+```
+
+- Frontend: **http://localhost:4200** (nginx serving the production build)
+- Backend: **http://localhost:8080** (Spring Boot, health-checked on `/api/simulation/status`)
+- `NEXUS_VEHICLES` (default 2000) and `JAVA_OPTS` (default `-Xms512m -Xmx2g`) are tunable.
+- Run on JDK 21: the build fails on newer JDKs because of Lombok.
+
+---
+
+## Tests and CI
+
+```bash
+cd backend  && mvn verify                                   # JUnit 5 + MockMvc, 59 tests
+cd frontend && npx ng test --watch=false --browsers=ChromeHeadlessCI   # Jasmine/Karma, 28 specs
+```
+
+Backend tests cover the road graph, A* routing (including congestion
+penalties), the route cache, the simulated clock, incidents, the replay ring
+buffer, the REST controllers and a full Spring context boot. Frontend specs
+cover the spatial grid, vehicle picking, selection/filter state, toast alerts
+and the app shell.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs backend tests, frontend tests
+plus a production build, then builds both Docker images on every push and PR.
+Dependabot keeps Maven, npm and Actions dependencies current.
 
 ---
 

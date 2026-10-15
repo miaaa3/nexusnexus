@@ -1,0 +1,33 @@
+# Whole stack in one command:  docker compose up --build
+#   frontend → http://localhost:4200
+#   backend  → http://localhost:8080  (the SPA calls it directly)
+#
+# Maps are not in the repo (a city extract is 10-300 MB). Drop an .osm in
+# backend/data/maps/ and set NEXUS_MAP below to its file name.
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8080:8080"
+    environment:
+      NEXUS_SIMULATION_LOCAL_FILE: data/maps/${NEXUS_MAP:-nexus-small.osm}
+      NEXUS_SIMULATION_VEHICLE_COUNT: ${NEXUS_VEHICLES:-2000}
+      JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx2g}
+    volumes:
+      - ./backend/data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/api/simulation/status"]
+      interval: 15s
+      timeout: 3s
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "4200:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
